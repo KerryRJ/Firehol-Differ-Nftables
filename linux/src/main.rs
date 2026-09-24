@@ -23,8 +23,8 @@ fn init_logging() -> Result<()> {
     let file = fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log_dir.join("firehol.log"))
-        .context("Failed to open /var/log/firehol-differ-nftables/firehol.log")?;
+        .open(log_dir.join("iodrive.log"))
+        .context("Failed to open /var/log/firehol-differ-nftables/iodrive.log")?;
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Pipe(Box::new(file)))
         .init();
