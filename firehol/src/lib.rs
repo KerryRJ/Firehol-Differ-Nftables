@@ -63,7 +63,7 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
     let cached_github_meta = read_or_empty(&data_dir.join("github-meta.json")).await?;
     let github_meta_unchanged = github_meta_etag.is_some()
         && etags.github_meta.as_deref() == github_meta_etag.as_deref();
-    let (github_meta, github_networks) = github_metadata(
+    let (github_meta, _github_networks) = github_metadata(
         &client,
         &cached_github_meta,
         github_meta_unchanged,
@@ -75,6 +75,7 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
 
     let old_lists = [&l1_local, &l2_local, &bogons_ipv4_local, &bogons_ipv6_local];
     let new_lists = [&l1_remote, &l2_remote, &bogons_ipv4_remote, &bogons_ipv6_remote];
+    #[cfg(target_os = "linux")]
     let mut new_sets = Vec::new();
     let mut total = 0;
     for (old_list, new_list) in old_lists.into_iter().zip(new_lists) {
@@ -87,16 +88,18 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
         additions.sort();
         deletions.sort();
         total += additions.len() + deletions.len();
+        #[cfg(target_os = "linux")]
         new_sets.push(new.ips);
     }
 
+    #[cfg(target_os = "linux")]
     let new_sets: Vec<Vec<String>> = new_sets.into_iter().map(|set| {
         let mut entries: Vec<_> = set.into_iter().collect();
         entries.sort();
         entries
     }).collect();
     #[cfg(target_os = "linux")]
-    nftables_sync::replace_lists(&new_sets, &config.whitelist, &github_networks, config.log_blocked)?;
+    nftables_sync::replace_lists(&new_sets, &config.whitelist, &_github_networks, config.log_blocked)?;
 
     tokio::try_join!(
         fs::write(data_dir.join("firehol_level1.netset"), &l1_remote),
