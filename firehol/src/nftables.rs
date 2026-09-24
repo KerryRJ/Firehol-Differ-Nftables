@@ -23,11 +23,17 @@ const WHITELIST_IPV6_SET: &str = "WhitelistIPv6";
 const GITHUB_WHITELIST_IPV4_SET: &str = "GithubWhitelistIPv4";
 const GITHUB_WHITELIST_IPV6_SET: &str = "GithubWhitelistIPv6";
 
-pub(super) fn replace_lists(lists: &[Vec<String>], whitelist: &[String], github_networks: &[String], log_blocked: bool) -> Result<()> {
+pub(super) fn replace_lists(
+    lists: &[Vec<String>],
+    whitelist_ipv4: &[String],
+    whitelist_ipv6: &[String],
+    github_networks: &[String],
+    log_blocked: bool,
+) -> Result<()> {
     ensure!(lists.len() == DOWNLOADED_SETS.len(), "Expected one entry list per downloaded source");
     ensure_table_and_sets()?;
     let mut commands = Vec::new();
-    append_whitelist(&mut commands, whitelist, github_networks)?;
+    append_whitelist(&mut commands, whitelist_ipv4, whitelist_ipv6, github_networks)?;
     for ((name, _), networks) in DOWNLOADED_SETS.iter().zip(lists) {
         let current = read_set_elements(name)?;
         let desired: HashSet<String> = networks.iter().cloned().collect();
@@ -175,12 +181,18 @@ fn set_command(name: &str, set_type: SetType) -> NfObject<'static> {
     }))))
 }
 
-fn append_whitelist(commands: &mut Vec<NfObject<'static>>, networks: &[String], github_networks: &[String]) -> Result<()> {
+fn append_whitelist(
+    commands: &mut Vec<NfObject<'static>>,
+    ipv4_networks: &[String],
+    ipv6_networks: &[String],
+    github_networks: &[String],
+) -> Result<()> {
     // Reconcile the small user-configured set on each update. The whitelist is
     // independent from the downloaded blacklist network sets.
-    let configured: Vec<&str> = networks.iter().map(String::as_str).collect();
-    append_whitelist_set(commands, WHITELIST_IPV4_SET, &configured, true)?;
-    append_whitelist_set(commands, WHITELIST_IPV6_SET, &configured, false)?;
+    let configured_ipv4: Vec<&str> = ipv4_networks.iter().map(String::as_str).collect();
+    let configured_ipv6: Vec<&str> = ipv6_networks.iter().map(String::as_str).collect();
+    append_whitelist_set(commands, WHITELIST_IPV4_SET, &configured_ipv4, true)?;
+    append_whitelist_set(commands, WHITELIST_IPV6_SET, &configured_ipv6, false)?;
     let github: Vec<&str> = github_networks.iter().map(String::as_str).collect();
     append_whitelist_set(commands, GITHUB_WHITELIST_IPV4_SET, &github, true)?;
     append_whitelist_set(commands, GITHUB_WHITELIST_IPV6_SET, &github, false)?;
