@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow, ensure};
 use nftables::{
     expr::{Expression, NamedExpression, Payload, PayloadField, Prefix},
     schema::{Chain, Element, FlushObject, NfCmd, NfListObject, NfObject, Nftables, Rule, Set, SetFlag, SetType, SetTypeValue, Table},
-    stmt::{Drop, Match, Operator, Statement},
+    stmt::{Drop, Log, Match, Operator, Statement},
     types::{NfChainPolicy, NfChainType, NfFamily, NfHook},
 };
 use std::{borrow::Cow, collections::HashSet, io::Write, process::{Command, Stdio}};
@@ -94,6 +94,14 @@ fn append_prerouting_rules(commands: &mut Vec<NfObject<'static>>) {
         ("ip", "FullBogonsIpv4"),
         ("ip6", "FullBogonsIpv6"),
     ] {
+        commands.push(rule_object(protocol, set, Statement::Log(Some(Log {
+            prefix: Some(Cow::Owned(format!("Blocked Iodrive-{set}: "))),
+            group: None,
+            snaplen: None,
+            queue_threshold: None,
+            level: None,
+            flags: None,
+        }))));
         commands.push(rule_object(protocol, set, Statement::Drop(Some(Drop {}))));
     }
 }
