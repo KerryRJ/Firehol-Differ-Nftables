@@ -215,13 +215,17 @@ fn read_set_elements(name: &str) -> Result<HashSet<String>> {
         return Err(anyhow!("Failed to list nftables set {name}: {}", String::from_utf8_lossy(&output.stderr).trim()));
     }
     let listed: serde_json::Value = serde_json::from_slice(&output.stdout).context("Could not parse nft set listing")?;
-    Ok(listed["nftables"].as_array().into_iter().flatten()
+    listed["nftables"].as_array().into_iter().flatten()
         .filter_map(|entry| entry.get("set").and_then(|set| set.get("elem")).and_then(serde_json::Value::as_array))
         .flatten().filter_map(|element| {
             if let Some(prefix) = element.get("prefix") {
                 Some(format!("{}/{}", prefix.get("addr")?.as_str()?, prefix.get("len")?.as_u64()?))
             } else { element.as_str().map(str::to_owned) }
-        }).collect())
+        }).map(|value| {
+            parse_network(&value)
+                .map(|network| network.trunc().to_string())
+                .with_context(|| format!("Invalid network in nftables set {name}: {value}"))
+        }).collect()
 }
 
 fn named_element_commands(name: &str, networks: &[String], add: bool) -> Result<Vec<NfObject<'static>>> {
