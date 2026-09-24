@@ -200,11 +200,22 @@ fn append_whitelist_set(commands: &mut Vec<NfObject<'static>>, name: &str, netwo
         }))
         .map(ToString::to_string)
         .collect();
-    let current = read_set_elements(name)?;
-    let additions: Vec<_> = desired.difference(&current).cloned().collect();
-    let deletions: Vec<_> = current.difference(&desired).cloned().collect();
-    commands.extend(named_element_commands(name, &deletions, false)?);
-    commands.extend(named_element_commands(name, &additions, true)?);
+    info!("nftables whitelist set {name}: replacing with {} networks", desired.len());
+    commands.push(NfObject::CmdObject(NfCmd::Flush(FlushObject::Set(Box::new(Set {
+        family: FAMILY,
+        table: TABLE.into(),
+        name: Cow::Owned(name.to_owned()),
+        handle: None,
+        set_type: SetTypeValue::Single(if ipv4 { SetType::Ipv4Addr } else { SetType::Ipv6Addr }),
+        policy: None,
+        flags: None,
+        elem: None,
+        timeout: None,
+        gc_interval: None,
+        size: None,
+        comment: None,
+    })))));
+    commands.extend(named_element_commands(name, &desired.into_iter().collect::<Vec<_>>(), true)?);
     Ok(())
 }
 
