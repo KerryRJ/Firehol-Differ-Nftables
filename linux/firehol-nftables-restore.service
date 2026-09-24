@@ -1,0 +1,6 @@
+[Unit]
+Description=Restore FireHOL nftables sets after nftables starts
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '/bin/systemctl kill --signal=USR1 firehol-differ-nftables.service || true'
