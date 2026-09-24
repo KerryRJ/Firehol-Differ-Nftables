@@ -96,7 +96,7 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
         entries
     }).collect();
     #[cfg(target_os = "linux")]
-    nftables_sync::replace_lists(&new_sets, &config.whitelist, &github_networks)?;
+    nftables_sync::replace_lists(&new_sets, &config.whitelist, &github_networks, config.log_blocked)?;
 
     tokio::try_join!(
         fs::write(data_dir.join("firehol_level1.netset"), &l1_remote),
@@ -141,7 +141,7 @@ pub async fn restore_cached(data_dir: &Path, config: &Config) -> Result<()> {
         entries.sort();
         networks.push(entries);
     }
-    nftables_sync::replace_lists(&networks, &config.whitelist, &github_networks)
+    nftables_sync::replace_lists(&networks, &config.whitelist, &github_networks, config.log_blocked)
 }
 
 async fn github_metadata(client: &reqwest::Client, cached: &str, use_cache: bool) -> Result<(String, Vec<String>)> {

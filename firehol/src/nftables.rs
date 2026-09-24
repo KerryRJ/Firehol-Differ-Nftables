@@ -22,7 +22,7 @@ const WHITELIST_IPV6_SET: &str = "WhitelistIPv6";
 const GITHUB_WHITELIST_IPV4_SET: &str = "GithubWhitelistIPv4";
 const GITHUB_WHITELIST_IPV6_SET: &str = "GithubWhitelistIPv6";
 
-pub(super) fn replace_lists(lists: &[Vec<String>], whitelist: &[String], github_networks: &[String]) -> Result<()> {
+pub(super) fn replace_lists(lists: &[Vec<String>], whitelist: &[String], github_networks: &[String], log_blocked: bool) -> Result<()> {
     ensure!(lists.len() == DOWNLOADED_SETS.len(), "Expected one entry list per downloaded source");
     ensure_table_and_sets()?;
     let mut commands = Vec::new();
@@ -35,7 +35,7 @@ pub(super) fn replace_lists(lists: &[Vec<String>], whitelist: &[String], github_
         commands.extend(named_element_commands(name, &deletions, false)?);
         commands.extend(named_element_commands(name, &additions, true)?);
     }
-    append_prerouting_rules(&mut commands);
+    append_prerouting_rules(&mut commands, log_blocked);
     run_document(commands)
 }
 
@@ -81,7 +81,7 @@ fn ensure_table_and_sets() -> Result<()> {
     Ok(())
 }
 
-fn append_prerouting_rules(commands: &mut Vec<NfObject<'static>>) {
+fn append_prerouting_rules(commands: &mut Vec<NfObject<'static>>, log_blocked: bool) {
     commands.push(NfObject::CmdObject(NfCmd::Flush(FlushObject::Chain(Chain {
         family: FAMILY,
         table: TABLE.into(),
@@ -93,26 +93,28 @@ fn append_prerouting_rules(commands: &mut Vec<NfObject<'static>>) {
         commands.push(rule_object("ip", set, vec![Statement::Accept(None)]));
     }
     for set in ["FullBogonsIpv4", "FireholL1", "FireholL2"] {
-        commands.push(logged_drop_rule("ip", set));
+        commands.push(drop_rule("ip", set, log_blocked));
     }
     for set in [WHITELIST_IPV6_SET, GITHUB_WHITELIST_IPV6_SET] {
         commands.push(rule_object("ip6", set, vec![Statement::Accept(None)]));
     }
-    commands.push(logged_drop_rule("ip6", "FullBogonsIpv6"));
+    commands.push(drop_rule("ip6", "FullBogonsIpv6", log_blocked));
 }
 
-fn logged_drop_rule(protocol: &str, set: &str) -> NfObject<'static> {
-    rule_object(protocol, set, vec![
-        Statement::Log(Some(Log {
+fn drop_rule(protocol: &str, set: &str, log_blocked: bool) -> NfObject<'static> {
+    let mut statements = Vec::new();
+    if log_blocked {
+        statements.push(Statement::Log(Some(Log {
             prefix: Some(Cow::Owned(format!("Blocked Iodrive-{set}: "))),
             group: None,
             snaplen: None,
             queue_threshold: None,
             level: None,
             flags: None,
-        })),
-        Statement::Drop(Some(Drop {})),
-    ])
+        })));
+    }
+    statements.push(Statement::Drop(Some(Drop {})));
+    rule_object(protocol, set, statements)
 }
 
 fn rule_object(protocol: &str, set: &str, statements: Vec<Statement<'static>>) -> NfObject<'static> {

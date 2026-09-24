@@ -66,6 +66,7 @@ l2_url = "https://iplists.firehol.org/files/firehol_level2.netset"
 bogons_ipv4_url = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv4.txt"
 bogons_ipv6_url = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv6.txt"
 whitelist = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
+log_blocked = false
 ```
 
 On Linux, `whitelist` populates `WhitelistIpv4` and
@@ -74,6 +75,8 @@ downloads all published CIDR ranges from GitHub's Meta API, checks its ETag,
 and maintains `GithubWhitelistIPv4` and `GithubWhitelistIPv6`. It installs the
 prerouting accept and drop rules after `nftables.service` starts or reloads.
 Set `whitelist = []` to leave the configurable whitelist sets empty.
+Set `log_blocked = true` to log packets matched by blacklist drop rules; it is
+off by default.
 
 Edit `$InstallDir\\config.toml` before starting the service if needed. The `path` setting controls where generated data is written. Its default value of `.` stores
 the ETags, downloaded netsets, and delta files in

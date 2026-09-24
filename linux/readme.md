@@ -58,6 +58,8 @@ the downloaded FireHOL or fullbogons sets. It uses the earliest numeric
 prerouting priority so it runs before other prerouting base chains. The default whitelist contains
 `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and `fc00::/7`; set
 `whitelist = []` to leave them empty.
+Blocked-packet logging is off by default; set `log_blocked = true` in
+`config.toml` to add logging to the blacklist drop rules.
 
 The service also maintains `GithubWhitelistIPv4` and `GithubWhitelistIPv6` from
 all CIDR ranges in GitHub's <https://api.github.com/meta> response. It checks
