@@ -50,12 +50,13 @@ a systemd drop-in that notifies this service after `nftables.service` loads its
 rules, so the cached sets are restored after nftables restarts or reloads. The
 service needs `CAP_NET_ADMIN` to update its dedicated `inet iodrive` table.
 
-The `whitelist-ipv4.txt` and `whitelist-ipv6.txt` files beside `config.toml` populate `WhitelistIPv4` and
+The `/var/lib/firehol-differ-nftables/whitelist-ipv4.txt` and
+`/var/lib/firehol-differ-nftables/whitelist-ipv6.txt` files populate `WhitelistIPv4` and
 `WhitelistIPv6`. The service installs a `firehol_prerouting` base chain
 in `inet iodrive` after `nftables.service` starts or reloads. It accepts packets
 whose source is in the whitelist, then drops packets whose source is in one of
 the downloaded FireHOL or fullbogons sets. It uses the earliest numeric
-prerouting priority so it runs before other prerouting base chains. Put one CIDR network per line in the matching file; blank lines and `#` comments are ignored. The package installs both files beside `config.toml`.
+prerouting priority so it runs before other prerouting base chains. Put one CIDR network per line in the matching file; blank lines and `#` comments are ignored. The package installs both files in `/var/lib/firehol-differ-nftables`.
 Blocked-packet logging is off by default; set `log_blocked = true` in
 `config.toml` to add logging to the blacklist drop rules.
 After enabling it and reloading the service, view the kernel log entries for
