@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, anyhow, ensure};
+use log::info;
 use nftables::{
     expr::{Expression, NamedExpression, Payload, PayloadField, Prefix},
     schema::{Chain, Element, FlushObject, NfCmd, NfListObject, NfObject, Nftables, Rule, Set, SetFlag, SetType, SetTypeValue, Table},
@@ -32,6 +33,8 @@ pub(super) fn replace_lists(lists: &[Vec<String>], whitelist: &[String], github_
         let desired: HashSet<String> = networks.iter().cloned().collect();
         let additions: Vec<_> = desired.difference(&current).cloned().collect();
         let deletions: Vec<_> = current.difference(&desired).cloned().collect();
+        let after_count = current.len() + additions.len() - deletions.len();
+        info!("nftables set {name}: before={} additions={} deletions={} after={after_count}", current.len(), additions.len(), deletions.len());
         commands.extend(named_element_commands(name, &deletions, false)?);
         commands.extend(named_element_commands(name, &additions, true)?);
     }
