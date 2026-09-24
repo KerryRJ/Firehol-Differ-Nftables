@@ -4,7 +4,6 @@ After=network-online.target
 Wants=network-online.target
 Requires=nftables.service
 After=nftables.service
-PartOf=nftables.service
 
 [Service]
 Type=simple
