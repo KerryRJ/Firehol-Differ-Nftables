@@ -67,8 +67,7 @@ fn ensure_table_and_sets() -> Result<()> {
             handle: None,
             _type: Some(NfChainType::Filter),
             hook: Some(NfHook::Prerouting),
-            // Use the earliest supported priority so this precedes other prerouting chains.
-            prio: Some(i32::MIN),
+            prio: Some(-500),
             dev: None,
             policy: Some(NfChainPolicy::Accept),
         }))));
@@ -86,27 +85,29 @@ fn append_prerouting_rules(commands: &mut Vec<NfObject<'static>>) {
     }))));
 
     for (protocol, set) in [("ip", WHITELIST_IPV4_SET), ("ip6", WHITELIST_IPV6_SET)] {
-        commands.push(rule_object(protocol, set, Statement::Accept(None)));
+        commands.push(rule_object(protocol, set, vec![Statement::Accept(None)]));
     }
     for (protocol, set) in [
+        ("ip", "FullBogonsIpv4"),
         ("ip", "FireholL1"),
         ("ip", "FireholL2"),
-        ("ip", "FullBogonsIpv4"),
         ("ip6", "FullBogonsIpv6"),
     ] {
-        commands.push(rule_object(protocol, set, Statement::Log(Some(Log {
+        commands.push(rule_object(protocol, set, vec![
+            Statement::Log(Some(Log {
             prefix: Some(Cow::Owned(format!("Blocked Iodrive-{set}: "))),
             group: None,
             snaplen: None,
             queue_threshold: None,
             level: None,
             flags: None,
-        }))));
-        commands.push(rule_object(protocol, set, Statement::Drop(Some(Drop {}))));
+            })),
+            Statement::Drop(Some(Drop {})),
+        ]));
     }
 }
 
-fn rule_object(protocol: &str, set: &str, verdict: Statement<'static>) -> NfObject<'static> {
+fn rule_object(protocol: &str, set: &str, statements: Vec<Statement<'static>>) -> NfObject<'static> {
     NfObject::CmdObject(NfCmd::Add(NfListObject::Rule(Rule {
         family: FAMILY,
         table: TABLE.into(),
@@ -120,11 +121,10 @@ fn rule_object(protocol: &str, set: &str, verdict: Statement<'static>) -> NfObje
                 right: Expression::String(Cow::Owned(format!("@{set}"))),
                 op: Operator::IN,
             }),
-            verdict,
-        ].into(),
+        ].into_iter().chain(statements).collect::<Vec<_>>().into(),
         handle: None,
         index: None,
-        comment: Some(Cow::Owned(format!("FireHOL {set}"))),
+        comment: None,
     })))
 }
 
