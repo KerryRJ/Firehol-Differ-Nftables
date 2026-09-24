@@ -105,7 +105,9 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
         entries
     }).collect();
     #[cfg(target_os = "linux")]
-    nftables_sync::replace_lists(&new_sets, &config.whitelist, &_github_networks, config.log_blocked)?;
+    let whitelist = load_whitelist(data_dir).await?;
+    #[cfg(target_os = "linux")]
+    nftables_sync::replace_lists(&new_sets, &whitelist, &_github_networks, config.log_blocked)?;
 
     tokio::try_join!(
         fs::write(data_dir.join("firehol_level1.netset"), &l1_remote),
@@ -150,7 +152,26 @@ pub async fn restore_cached(data_dir: &Path, config: &Config) -> Result<()> {
         entries.sort();
         networks.push(entries);
     }
-    nftables_sync::replace_lists(&networks, &config.whitelist, &github_networks, config.log_blocked)
+    let whitelist = load_whitelist(data_dir).await?;
+    nftables_sync::replace_lists(&networks, &whitelist, &github_networks, config.log_blocked)
+}
+
+#[cfg(target_os = "linux")]
+async fn load_whitelist(data_dir: &Path) -> Result<Vec<String>> {
+    let ipv4_path = data_dir.join("whitelist-ipv4.txt");
+    let ipv6_path = data_dir.join("whitelist-ipv6.txt");
+    let (ipv4_text, ipv6_text) = tokio::try_join!(
+        async { fs::read_to_string(&ipv4_path).await.with_context(|| format!("Failed to read {}", ipv4_path.display())) },
+        async { fs::read_to_string(&ipv6_path).await.with_context(|| format!("Failed to read {}", ipv6_path.display())) },
+    )?;
+
+    let mut ipv4 = Ipset::new().from(&ipv4_text);
+    ipv4.consolidate();
+    let mut ipv6 = Ipset::new().from(&ipv6_text);
+    ipv6.consolidate();
+    let mut networks: Vec<_> = ipv4.ips.into_iter().chain(ipv6.ips).collect();
+    networks.sort();
+    Ok(networks)
 }
 
 async fn github_metadata(client: &reqwest::Client, cached: &str, use_cache: bool) -> Result<(String, Vec<String>)> {
