@@ -60,6 +60,22 @@ prerouting priority so it runs before other prerouting base chains. The default 
 `whitelist = []` to leave them empty.
 Blocked-packet logging is off by default; set `log_blocked = true` in
 `config.toml` to add logging to the blacklist drop rules.
+After enabling it and reloading the service, view the kernel log entries for
+packets matched by these drop rules with:
+
+```sh
+sudo journalctl -k -g 'Blocked Iodrive-'
+```
+
+To follow new blocked packet entries live, add `-f`:
+
+```sh
+sudo journalctl -kf -g 'Blocked Iodrive-'
+```
+
+Each matching entry includes the source and destination IP addresses. If no
+entries appear, check that kernel logging is available and that packets are
+reaching one of the blacklist drop rules.
 
 The service also maintains `GithubWhitelistIPv4` and `GithubWhitelistIPv6` from
 all CIDR ranges in GitHub's <https://api.github.com/meta> response. It checks
