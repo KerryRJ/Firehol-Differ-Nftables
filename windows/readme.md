@@ -69,9 +69,11 @@ whitelist = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
 ```
 
 On Linux, `whitelist` populates `WhitelistIpv4` and
-`WhitelistIPv6` in the `inet iodrive` nftables table. The Linux service
-installs the prerouting accept and drop rules after `nftables.service` starts or
-reloads. Set `whitelist = []` to leave both whitelist sets empty.
+`WhitelistIPv6` in the `inet iodrive` nftables table. The Linux service also
+downloads all published CIDR ranges from GitHub's Meta API, checks its ETag,
+and maintains `GithubWhitelistIPv4` and `GithubWhitelistIPv6`. It installs the
+prerouting accept and drop rules after `nftables.service` starts or reloads.
+Set `whitelist = []` to leave the configurable whitelist sets empty.
 
 Edit `$InstallDir\\config.toml` before starting the service if needed. The `path` setting controls where generated data is written. Its default value of `.` stores
 the ETags, downloaded netsets, and delta files in

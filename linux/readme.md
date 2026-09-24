@@ -59,6 +59,12 @@ prerouting priority so it runs before other prerouting base chains. The default 
 `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and `fc00::/7`; set
 `whitelist = []` to leave them empty.
 
+The service also maintains `GithubWhitelistIPv4` and `GithubWhitelistIPv6` from
+all CIDR ranges in GitHub's <https://api.github.com/meta> response. It checks
+the endpoint's ETag on each scheduled update, downloads changed metadata, and
+caches it as `github-meta.json` for nftables reloads. These sets are accepted
+before the downloaded blacklist rules.
+
 ## Check the nftables sets
 
 List all rules and sets in the service's table:
@@ -76,6 +82,8 @@ sudo nft list set inet iodrive FireholL1
 sudo nft list set inet iodrive FireholL2
 sudo nft list set inet iodrive WhitelistIpv4
 sudo nft list set inet iodrive WhitelistIPv6
+sudo nft list set inet iodrive GithubWhitelistIPv4
+sudo nft list set inet iodrive GithubWhitelistIPv6
 ```
 
 Each downloaded list has its own set: `FullBogonsIpv4`, `FullBogonsIpv6`,

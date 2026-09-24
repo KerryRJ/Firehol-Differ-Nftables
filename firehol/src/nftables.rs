@@ -19,11 +19,14 @@ const DOWNLOADED_SETS: [(&str, SetType); 4] = [
 const WHITELIST_IPV4_SET: &str = "WhitelistIPv4";
 const WHITELIST_IPV6_SET: &str = "WhitelistIPv6";
 
-pub(super) fn replace_lists(lists: &[Vec<String>], whitelist: &[String]) -> Result<()> {
+const GITHUB_WHITELIST_IPV4_SET: &str = "GithubWhitelistIPv4";
+const GITHUB_WHITELIST_IPV6_SET: &str = "GithubWhitelistIPv6";
+
+pub(super) fn replace_lists(lists: &[Vec<String>], whitelist: &[String], github_networks: &[String]) -> Result<()> {
     ensure!(lists.len() == DOWNLOADED_SETS.len(), "Expected one entry list per downloaded source");
     ensure_table_and_sets()?;
     let mut commands = Vec::new();
-    append_whitelist(&mut commands, whitelist)?;
+    append_whitelist(&mut commands, whitelist, github_networks)?;
     for ((name, _), networks) in DOWNLOADED_SETS.iter().zip(lists) {
         let current = read_set_elements(name)?;
         let desired: HashSet<String> = networks.iter().cloned().collect();
@@ -55,6 +58,8 @@ fn ensure_table_and_sets() -> Result<()> {
     }
     if !existing.contains(WHITELIST_IPV4_SET) { missing.push(set_command(WHITELIST_IPV4_SET, SetType::Ipv4Addr)); }
     if !existing.contains(WHITELIST_IPV6_SET) { missing.push(set_command(WHITELIST_IPV6_SET, SetType::Ipv6Addr)); }
+    if !existing.contains(GITHUB_WHITELIST_IPV4_SET) { missing.push(set_command(GITHUB_WHITELIST_IPV4_SET, SetType::Ipv4Addr)); }
+    if !existing.contains(GITHUB_WHITELIST_IPV6_SET) { missing.push(set_command(GITHUB_WHITELIST_IPV6_SET, SetType::Ipv6Addr)); }
     let chains: HashSet<String> = listed["nftables"].as_array().into_iter().flatten()
         .filter_map(|entry| entry.get("chain").and_then(|chain| chain.get("name")).and_then(serde_json::Value::as_str).map(str::to_owned))
         .collect();
@@ -85,6 +90,12 @@ fn append_prerouting_rules(commands: &mut Vec<NfObject<'static>>) {
     }))));
 
     for (protocol, set) in [("ip", WHITELIST_IPV4_SET), ("ip6", WHITELIST_IPV6_SET)] {
+        commands.push(rule_object(protocol, set, vec![Statement::Accept(None)]));
+    }
+    for (protocol, set) in [
+        ("ip", GITHUB_WHITELIST_IPV4_SET),
+        ("ip6", GITHUB_WHITELIST_IPV6_SET),
+    ] {
         commands.push(rule_object(protocol, set, vec![Statement::Accept(None)]));
     }
     for (protocol, set) in [
@@ -161,24 +172,36 @@ fn set_command(name: &str, set_type: SetType) -> NfObject<'static> {
     }))))
 }
 
-fn append_whitelist(commands: &mut Vec<NfObject<'static>>, networks: &[String]) -> Result<()> {
+fn append_whitelist(commands: &mut Vec<NfObject<'static>>, networks: &[String], github_networks: &[String]) -> Result<()> {
     // Reconcile the small user-configured set on each update. The whitelist is
     // independent from the downloaded blacklist network sets.
-    for name in [WHITELIST_IPV4_SET, WHITELIST_IPV6_SET] {
-        let current = read_set_elements(name)?;
-        let desired: HashSet<String> = networks.iter().map(|value| {
-            value.parse::<ipnet::IpNet>()
-                .map(|net| net.trunc().to_string())
-                .with_context(|| format!("Invalid whitelist network: {value}"))
-        }).collect::<Result<_>>()?;
-        let desired: HashSet<String> = desired.into_iter().filter(|n| {
-            n.parse::<ipnet::IpNet>().is_ok_and(|parsed| if name == WHITELIST_IPV4_SET { parsed.addr().is_ipv4() } else { parsed.addr().is_ipv6() })
-        }).collect();
-        let additions: Vec<_> = desired.difference(&current).cloned().collect();
-        let deletions: Vec<_> = current.difference(&desired).cloned().collect();
-        commands.extend(named_element_commands(name, &deletions, false)?);
-        commands.extend(named_element_commands(name, &additions, true)?);
-    }
+    let configured: Vec<&str> = networks.iter().map(String::as_str).collect();
+    append_whitelist_set(commands, WHITELIST_IPV4_SET, &configured, true)?;
+    append_whitelist_set(commands, WHITELIST_IPV6_SET, &configured, false)?;
+    let github: Vec<&str> = github_networks.iter().map(String::as_str).collect();
+    append_whitelist_set(commands, GITHUB_WHITELIST_IPV4_SET, &github, true)?;
+    append_whitelist_set(commands, GITHUB_WHITELIST_IPV6_SET, &github, false)?;
+    Ok(())
+}
+
+fn append_whitelist_set(commands: &mut Vec<NfObject<'static>>, name: &str, networks: &[&str], ipv4: bool) -> Result<()> {
+    let parsed: Vec<ipnet::IpNet> = networks.iter().map(|value| {
+        value.parse::<ipnet::IpNet>()
+            .map(|net| net.trunc())
+            .with_context(|| format!("Invalid whitelist network: {value}"))
+    }).collect::<Result<_>>()?;
+    let desired: HashSet<String> = parsed.iter()
+        .filter(|candidate| candidate.addr().is_ipv4() == ipv4)
+        .filter(|candidate| !parsed.iter().any(|outer| {
+            outer.prefix_len() < candidate.prefix_len() && outer.contains(*candidate)
+        }))
+        .map(ToString::to_string)
+        .collect();
+    let current = read_set_elements(name)?;
+    let additions: Vec<_> = desired.difference(&current).cloned().collect();
+    let deletions: Vec<_> = current.difference(&desired).cloned().collect();
+    commands.extend(named_element_commands(name, &deletions, false)?);
+    commands.extend(named_element_commands(name, &additions, true)?);
     Ok(())
 }
 

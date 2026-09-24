@@ -10,6 +10,8 @@ pub(crate) struct Etags {
     pub(crate) bogons_ipv4: Option<String>,
     #[serde(default)]
     pub(crate) bogons_ipv6: Option<String>,
+    #[serde(default)]
+    pub(crate) github_meta: Option<String>,
 }
 
 impl Etags {

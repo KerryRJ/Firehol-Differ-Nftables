@@ -6,14 +6,16 @@ mod ipset;
 mod nftables_sync;
 
 pub use config::{load_config, Config};
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use etags::Etags;
 use ipset::Ipset;
 use log::info;
-use std::path::{Path, PathBuf};
+use std::{collections::HashSet, path::{Path, PathBuf}};
 use std::time::Instant;
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
+
+const GITHUB_META_URL: &str = "https://api.github.com/meta";
 
 pub async fn run_scheduler(data_dir: PathBuf, config: Config, cancellation: CancellationToken) -> Result<()> {
     let mut ticker = tokio::time::interval(config.interval);
@@ -29,32 +31,43 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
     fs::create_dir_all(data_dir).await?;
     let start = Instant::now();
     let mut etags = Etags::load(data_dir).await.unwrap_or_default();
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder().user_agent("firehol-differ-nftables").build()?;
     let l1_etag = remote_etag(&client, &config.l1_url).await?;
     let l2_etag = remote_etag(&client, &config.l2_url).await?;
     let bogons_ipv4_etag = remote_etag(&client, &config.bogons_ipv4_url).await?;
     let bogons_ipv6_etag = remote_etag(&client, &config.bogons_ipv6_url).await?;
+    let github_meta_etag = remote_etag(&client, GITHUB_META_URL).await?;
 
     if l1_etag.is_some()
         && l2_etag.is_some()
         && bogons_ipv4_etag.is_some()
         && bogons_ipv6_etag.is_some()
+        && github_meta_etag.is_some()
         && etags.l1.as_deref() == l1_etag.as_deref()
         && etags.l2.as_deref() == l2_etag.as_deref()
         && etags.bogons_ipv4.as_deref() == bogons_ipv4_etag.as_deref()
         && etags.bogons_ipv6.as_deref() == bogons_ipv6_etag.as_deref()
+        && etags.github_meta.as_deref() == github_meta_etag.as_deref()
     {
         info!("ETags have not changed.");
         return Ok(());
     }
 
-    info!("Downloading FireHOL level 1 and 2 and Team Cymru fullbogons IPv4 and IPv6 lists ...");
+    info!("Downloading FireHOL, Team Cymru, and GitHub IP lists ...");
     let (l1_remote, l2_remote, bogons_ipv4_remote, bogons_ipv6_remote) = tokio::try_join!(
         download(&client, &config.l1_url),
         download(&client, &config.l2_url),
         download(&client, &config.bogons_ipv4_url),
         download(&client, &config.bogons_ipv6_url),
     )?;
+    let cached_github_meta = read_or_empty(&data_dir.join("github-meta.json")).await?;
+    let github_meta_unchanged = github_meta_etag.is_some()
+        && etags.github_meta.as_deref() == github_meta_etag.as_deref();
+    let (github_meta, github_networks) = github_metadata(
+        &client,
+        &cached_github_meta,
+        github_meta_unchanged,
+    ).await?;
     let l1_local = read_or_empty(&data_dir.join("firehol_level1.netset")).await?;
     let l2_local = read_or_empty(&data_dir.join("firehol_level2.netset")).await?;
     let bogons_ipv4_local = read_or_empty(&data_dir.join("fullbogons-ipv4.txt")).await?;
@@ -83,13 +96,14 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
         entries
     }).collect();
     #[cfg(target_os = "linux")]
-    nftables_sync::replace_lists(&new_sets, &config.whitelist)?;
+    nftables_sync::replace_lists(&new_sets, &config.whitelist, &github_networks)?;
 
     tokio::try_join!(
         fs::write(data_dir.join("firehol_level1.netset"), &l1_remote),
         fs::write(data_dir.join("firehol_level2.netset"), &l2_remote),
         fs::write(data_dir.join("fullbogons-ipv4.txt"), &bogons_ipv4_remote),
-        fs::write(data_dir.join("fullbogons-ipv6.txt"), &bogons_ipv6_remote)
+        fs::write(data_dir.join("fullbogons-ipv6.txt"), &bogons_ipv6_remote),
+        fs::write(data_dir.join("github-meta.json"), &github_meta)
     )?;
     info!("Remote IPs: L1={} L2={} Bogons4={} Bogons6={} T={}", rows(&l1_remote), rows(&l2_remote), rows(&bogons_ipv4_remote), rows(&bogons_ipv6_remote), rows(&l1_remote) + rows(&l2_remote) + rows(&bogons_ipv4_remote) + rows(&bogons_ipv6_remote));
     info!("Total changes: {total}");
@@ -97,6 +111,7 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
     etags.l2 = l2_etag;
     etags.bogons_ipv4 = bogons_ipv4_etag;
     etags.bogons_ipv6 = bogons_ipv6_etag;
+    etags.github_meta = github_meta_etag;
     etags.save(data_dir).await?;
     info!("Elapsed time: {:.3} seconds", start.elapsed().as_secs_f64());
     Ok(())
@@ -110,6 +125,12 @@ pub async fn restore_cached(data_dir: &Path, config: &Config) -> Result<()> {
     let l2 = read_or_empty(&data_dir.join("firehol_level2.netset")).await?;
     let bogons_ipv4 = read_or_empty(&data_dir.join("fullbogons-ipv4.txt")).await?;
     let bogons_ipv6 = read_or_empty(&data_dir.join("fullbogons-ipv6.txt")).await?;
+    let cached_github_meta = read_or_empty(&data_dir.join("github-meta.json")).await?;
+    let client = reqwest::Client::builder().user_agent("firehol-differ-nftables").build()?;
+    let (github_meta, github_networks) = github_metadata(&client, &cached_github_meta, true).await?;
+    if github_meta != cached_github_meta {
+        fs::write(data_dir.join("github-meta.json"), &github_meta).await?;
+    }
 
     let lists = [&l1, &l2, &bogons_ipv4, &bogons_ipv6];
     let mut networks = Vec::new();
@@ -120,7 +141,48 @@ pub async fn restore_cached(data_dir: &Path, config: &Config) -> Result<()> {
         entries.sort();
         networks.push(entries);
     }
-    nftables_sync::replace_lists(&networks, &config.whitelist)
+    nftables_sync::replace_lists(&networks, &config.whitelist, &github_networks)
+}
+
+async fn github_metadata(client: &reqwest::Client, cached: &str, use_cache: bool) -> Result<(String, Vec<String>)> {
+    if use_cache && !cached.is_empty() {
+        if let Ok(networks) = parse_github_ranges(cached) {
+            return Ok((cached.to_owned(), networks));
+        }
+    }
+
+    let body = download(client, GITHUB_META_URL).await?;
+    let networks = parse_github_ranges(&body)?;
+    Ok((body, networks))
+}
+
+fn parse_github_ranges(body: &str) -> Result<Vec<String>> {
+    let metadata: serde_json::Value = serde_json::from_str(body).context("Could not parse GitHub IP metadata")?;
+    ensure!(metadata.is_object(), "GitHub IP metadata must be a JSON object");
+    for field in ["hooks", "web", "api", "git"] {
+        ensure!(metadata.get(field).and_then(serde_json::Value::as_array).is_some(), "GitHub IP metadata is missing the {field} ranges");
+    }
+
+    let mut ranges = HashSet::new();
+    collect_ip_ranges(&metadata, &mut ranges);
+    ensure!(ranges.iter().any(|range| range.contains('.')), "GitHub metadata contains no IPv4 ranges");
+    ensure!(ranges.iter().any(|range| range.contains(':')), "GitHub metadata contains no IPv6 ranges");
+    let mut ranges: Vec<_> = ranges.into_iter().collect();
+    ranges.sort();
+    Ok(ranges)
+}
+
+fn collect_ip_ranges(value: &serde_json::Value, ranges: &mut HashSet<String>) {
+    match value {
+        serde_json::Value::Array(values) => values.iter().for_each(|value| collect_ip_ranges(value, ranges)),
+        serde_json::Value::Object(values) => values.values().for_each(|value| collect_ip_ranges(value, ranges)),
+        serde_json::Value::String(value) => {
+            if let Ok(network) = value.parse::<ipnet::IpNet>() {
+                ranges.insert(network.trunc().to_string());
+            }
+        }
+        _ => {}
+    }
 }
 
 async fn remote_etag(client: &reqwest::Client, url: &str) -> Result<Option<String>> {
