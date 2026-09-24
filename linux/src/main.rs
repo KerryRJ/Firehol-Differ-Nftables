@@ -64,14 +64,14 @@ pub async fn run() -> Result<()> {
                     }
                 };
                 let new_data_dir = new_config.path.clone();
+                if let Err(error) = restore_cached(&new_data_dir, &new_config).await {
+                    log::error!("Failed to apply reloaded configuration to cached nftables sets: {error:#}");
+                }
                 let new_scheduler = start_scheduler(new_config.clone()).await?;
                 scheduler.cancellation.cancel();
                 scheduler.task.await.context("Scheduler task failed during reload")??;
                 scheduler = new_scheduler;
                 restore_data_dir = new_data_dir;
-                if let Err(error) = restore_cached(&restore_data_dir, &new_config).await {
-                    log::error!("Failed to restore cached nftables sets after config reload: {error:#}");
-                }
             }
             _ = nftables_reload.recv() => {
                 info!("Received nftables reload notification; restoring cached sets");

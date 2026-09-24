@@ -54,6 +54,8 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
         && etags.github_meta.as_deref() == github_meta_etag.as_deref()
     {
         info!("ETags have not changed.");
+        #[cfg(target_os = "linux")]
+        restore_cached(data_dir, config).await?;
         return Ok(());
     }
 
