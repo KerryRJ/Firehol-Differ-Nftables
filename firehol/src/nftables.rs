@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use nftables::{
     expr::{Expression, NamedExpression, Prefix},
     schema::{Element, NfCmd, NfListObject, NfObject, Nftables, Set, SetFlag, SetType, SetTypeValue, Table},
@@ -8,31 +8,28 @@ use std::{borrow::Cow, collections::HashSet, io::Write, process::{Command, Stdio
 
 const FAMILY: NfFamily = NfFamily::INet;
 const TABLE: &str = "firehol";
-const IPV4_SET: &str = "firehol_ipv4";
-const IPV6_SET: &str = "firehol_ipv6";
+const DOWNLOADED_SETS: [(&str, SetType); 4] = [
+    ("FireholL1", SetType::Ipv4Addr),
+    ("FireholL2", SetType::Ipv4Addr),
+    ("FullBogonsIpv4", SetType::Ipv4Addr),
+    ("FullBogonsIpv6", SetType::Ipv6Addr),
+];
 const WHITELIST_IPV4_SET: &str = "firehol_whitelist_ipv4";
 const WHITELIST_IPV6_SET: &str = "firehol_whitelist_ipv6";
 
-pub(super) fn apply(additions: &[String], deletions: &[String], whitelist: &[String]) -> Result<()> {
+pub(super) fn replace_lists(lists: &[Vec<String>], whitelist: &[String]) -> Result<()> {
+    ensure!(lists.len() == DOWNLOADED_SETS.len(), "Expected one entry list per downloaded source");
     ensure_table_and_sets()?;
     let mut commands = Vec::new();
     append_whitelist(&mut commands, whitelist)?;
-    append_elements(&mut commands, deletions, false)?;
-    append_elements(&mut commands, additions, true)?;
-
-    run_document(commands)
-}
-
-pub(super) fn replace_elements(networks: &[String], whitelist: &[String]) -> Result<()> {
-    ensure_table_and_sets()?;
-    let mut commands = Vec::new();
-    append_whitelist(&mut commands, whitelist)?;
-    let (v4, v6) = list_elements()?;
-    let desired: HashSet<String> = networks.iter().cloned().collect();
-    let additions: Vec<_> = desired.difference(&v4.union(&v6).cloned().collect()).cloned().collect();
-    let deletions: Vec<_> = v4.union(&v6).filter(|network| !desired.contains(*network)).cloned().collect();
-    commands.extend(element_commands(&deletions, false)?);
-    commands.extend(element_commands(&additions, true)?);
+    for ((name, _), networks) in DOWNLOADED_SETS.iter().zip(lists) {
+        let current = read_set_elements(name)?;
+        let desired: HashSet<String> = networks.iter().cloned().collect();
+        let additions: Vec<_> = desired.difference(&current).cloned().collect();
+        let deletions: Vec<_> = current.difference(&desired).cloned().collect();
+        commands.extend(named_element_commands(name, &deletions, false)?);
+        commands.extend(named_element_commands(name, &additions, true)?);
+    }
     run_document(commands)
 }
 
@@ -50,8 +47,9 @@ fn ensure_table_and_sets() -> Result<()> {
         .filter_map(|entry| entry.get("set").and_then(|set| set.get("name")).and_then(serde_json::Value::as_str).map(str::to_owned))
         .collect();
     let mut missing = Vec::new();
-    if !existing.contains(IPV4_SET) { missing.push(set_command(IPV4_SET, SetType::Ipv4Addr)); }
-    if !existing.contains(IPV6_SET) { missing.push(set_command(IPV6_SET, SetType::Ipv6Addr)); }
+    for (name, set_type) in DOWNLOADED_SETS {
+        if !existing.contains(name) { missing.push(set_command(name, set_type)); }
+    }
     if !existing.contains(WHITELIST_IPV4_SET) { missing.push(set_command(WHITELIST_IPV4_SET, SetType::Ipv4Addr)); }
     if !existing.contains(WHITELIST_IPV6_SET) { missing.push(set_command(WHITELIST_IPV6_SET, SetType::Ipv6Addr)); }
     if !missing.is_empty() { run_document(missing)?; }
@@ -89,33 +87,6 @@ fn set_command(name: &str, set_type: SetType) -> NfObject<'static> {
         size: None,
         comment: None,
     }))))
-}
-
-fn list_elements() -> Result<(HashSet<String>, HashSet<String>)> {
-    fn read_set(name: &str) -> Result<HashSet<String>> {
-        let output = Command::new("nft").args(["-j", "list", "set", "inet", TABLE, name]).output()
-            .with_context(|| format!("Failed to list nftables set {name}"))?;
-        if !output.status.success() {
-            return Err(anyhow!("Failed to list nftables set {name}: {}", String::from_utf8_lossy(&output.stderr).trim()));
-        }
-        let listed: serde_json::Value = serde_json::from_slice(&output.stdout).context("Could not parse nft set listing")?;
-        let values = listed["nftables"].as_array().into_iter().flatten()
-            .filter_map(|entry| entry.get("set").and_then(|set| set.get("elem")).and_then(serde_json::Value::as_array))
-            .flatten().filter_map(|element| {
-                if let Some(prefix) = element.get("prefix") {
-                    Some(format!("{}/{}", prefix.get("addr")?.as_str()?, prefix.get("len")?.as_u64()?))
-                } else {
-                    element.as_str().map(str::to_owned)
-                }
-            }).collect();
-        Ok(values)
-    }
-    Ok((read_set(IPV4_SET)?, read_set(IPV6_SET)?))
-}
-
-fn append_elements(commands: &mut Vec<NfObject<'static>>, networks: &[String], add: bool) -> Result<()> {
-    commands.extend(element_commands(networks, add)?);
-    Ok(())
 }
 
 fn append_whitelist(commands: &mut Vec<NfObject<'static>>, networks: &[String]) -> Result<()> {
@@ -165,26 +136,6 @@ fn named_element_commands(name: &str, networks: &[String], add: bool) -> Result<
         };
         let element = Element { family: FAMILY, table: TABLE.into(), name: Cow::Owned(name.to_owned()), elem: vec![Expression::Named(NamedExpression::Prefix(Prefix { addr: Box::new(Expression::String(Cow::Owned(addr))), len: len.into() }))].into() };
         commands.push(NfObject::CmdObject(if add { NfCmd::Add(NfListObject::Element(element)) } else { NfCmd::Delete(NfListObject::Element(element)) }));
-    }
-    Ok(commands)
-}
-
-fn element_commands(networks: &[String], add: bool) -> Result<Vec<NfObject<'static>>> {
-    let mut commands = Vec::new();
-    for value in networks {
-        let network: ipnet::IpNet = value.parse().with_context(|| format!("Invalid network in delta: {value}"))?;
-        let (name, addr, len) = match network {
-            ipnet::IpNet::V4(net) => (IPV4_SET, net.network().to_string(), net.prefix_len()),
-            ipnet::IpNet::V6(net) => (IPV6_SET, net.network().to_string(), net.prefix_len()),
-        };
-        let element = Element {
-            family: FAMILY,
-            table: TABLE.into(),
-            name: name.into(),
-            elem: vec![Expression::Named(NamedExpression::Prefix(Prefix { addr: Box::new(Expression::String(Cow::Owned(addr))), len: len.into() }))].into(),
-        };
-        let command = if add { NfCmd::Add(NfListObject::Element(element)) } else { NfCmd::Delete(NfListObject::Element(element)) };
-        commands.push(NfObject::CmdObject(command));
     }
     Ok(commands)
 }

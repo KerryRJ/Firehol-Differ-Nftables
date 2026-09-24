@@ -2,7 +2,8 @@ mod config;
 mod etags;
 mod ipset;
 #[cfg(target_os = "linux")]
-mod nftables;
+#[path = "nftables.rs"]
+mod nftables_sync;
 
 pub use config::{load_config, Config};
 use anyhow::Result;
@@ -59,16 +60,30 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
     let bogons_ipv4_local = read_or_empty(&data_dir.join("fullbogons-ipv4.txt")).await?;
     let bogons_ipv6_local = read_or_empty(&data_dir.join("fullbogons-ipv6.txt")).await?;
 
-    let mut old = Ipset::new().from(&l1_local).from(&l2_local).from(&bogons_ipv4_local).from(&bogons_ipv6_local);
-    let mut new = Ipset::new().from(&l1_remote).from(&l2_remote).from(&bogons_ipv4_remote).from(&bogons_ipv6_remote);
-    old.consolidate(); new.consolidate();
-    let mut additions: Vec<_> = new.ips.difference(&old.ips).cloned().collect();
-    let mut deletions: Vec<_> = old.ips.difference(&new.ips).cloned().collect();
-    additions.sort(); deletions.sort();
-    let total = additions.len() + deletions.len();
+    let old_lists = [&l1_local, &l2_local, &bogons_ipv4_local, &bogons_ipv6_local];
+    let new_lists = [&l1_remote, &l2_remote, &bogons_ipv4_remote, &bogons_ipv6_remote];
+    let mut new_sets = Vec::new();
+    let mut total = 0;
+    for (old_list, new_list) in old_lists.into_iter().zip(new_lists) {
+        let mut old = Ipset::new().from(old_list);
+        let mut new = Ipset::new().from(new_list);
+        old.consolidate();
+        new.consolidate();
+        let mut additions: Vec<_> = new.ips.difference(&old.ips).cloned().collect();
+        let mut deletions: Vec<_> = old.ips.difference(&new.ips).cloned().collect();
+        additions.sort();
+        deletions.sort();
+        total += additions.len() + deletions.len();
+        new_sets.push(new.ips);
+    }
 
+    let new_sets: Vec<Vec<String>> = new_sets.into_iter().map(|set| {
+        let mut entries: Vec<_> = set.into_iter().collect();
+        entries.sort();
+        entries
+    }).collect();
     #[cfg(target_os = "linux")]
-    nftables::apply(&additions, &deletions, &config.whitelist)?;
+    nftables_sync::replace_lists(&new_sets, &config.whitelist)?;
 
     tokio::try_join!(
         fs::write(data_dir.join("firehol_level1.netset"), &l1_remote),
@@ -96,11 +111,16 @@ pub async fn restore_cached(data_dir: &Path, config: &Config) -> Result<()> {
     let bogons_ipv4 = read_or_empty(&data_dir.join("fullbogons-ipv4.txt")).await?;
     let bogons_ipv6 = read_or_empty(&data_dir.join("fullbogons-ipv6.txt")).await?;
 
-    let mut networks = Ipset::new().from(&l1).from(&l2).from(&bogons_ipv4).from(&bogons_ipv6);
-    networks.consolidate();
-    let mut networks: Vec<_> = networks.ips.into_iter().collect();
-    networks.sort();
-    nftables::replace_elements(&networks, &config.whitelist)
+    let lists = [&l1, &l2, &bogons_ipv4, &bogons_ipv6];
+    let mut networks = Vec::new();
+    for list in lists {
+        let mut set = Ipset::new().from(list);
+        set.consolidate();
+        let mut entries: Vec<_> = set.ips.into_iter().collect();
+        entries.sort();
+        networks.push(entries);
+    }
+    nftables_sync::replace_lists(&networks, &config.whitelist)
 }
 
 async fn remote_etag(client: &reqwest::Client, url: &str) -> Result<Option<String>> {

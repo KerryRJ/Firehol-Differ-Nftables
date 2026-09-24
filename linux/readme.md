@@ -52,10 +52,35 @@ service needs `CAP_NET_ADMIN` to update its dedicated `inet firehol` table.
 
 The `whitelist` configuration setting populates `firehol_whitelist_ipv4` and
 `firehol_whitelist_ipv6`. In your nftables rules, match these sets before
-`firehol_ipv4` and `firehol_ipv6` so whitelisted traffic is accepted before
+the downloaded list sets so whitelisted traffic is accepted before
 blacklist matches. The default whitelist contains `10.0.0.0/8`, `172.16.0.0/12`,
 `192.168.0.0/16`, and `fc00::/7`; set `whitelist = []` to leave them empty.
 
+## Check the nftables sets
+
+List all rules and sets in the service's table:
+
+```sh
+sudo nft list table inet firehol
+```
+
+To inspect one set at a time, including its elements, use:
+
+```sh
+sudo nft list set inet firehol FullBogonsIpv4
+sudo nft list set inet firehol FullBogonsIpv6
+sudo nft list set inet firehol FireholL1
+sudo nft list set inet firehol FireholL2
+sudo nft list set inet firehol firehol_whitelist_ipv4
+sudo nft list set inet firehol firehol_whitelist_ipv6
+```
+
+Each downloaded list has its own set: `FullBogonsIpv4`, `FullBogonsIpv6`,
+`FireholL1`, and `FireholL2`. The whitelist sets contain the configured
+whitelist addresses. The sets are created
+and populated by the service, so an empty set can mean the initial fetch has
+not completed yet. Check the service logs below if a set is missing or remains
+empty.
 Check its status and logs with:
 
 ```sh
