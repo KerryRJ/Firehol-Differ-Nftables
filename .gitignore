@@ -1,4 +1,5 @@
 /target/
 etags.json
 firehol_level*.netset
+fullbogons-ipv*.txt
 delta-*.txt

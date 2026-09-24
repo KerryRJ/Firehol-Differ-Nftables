@@ -6,6 +6,8 @@ use tokio::fs;
 
 const DEFAULT_L1_URL: &str = "https://iplists.firehol.org/files/firehol_level1.netset";
 const DEFAULT_L2_URL: &str = "https://iplists.firehol.org/files/firehol_level2.netset";
+const DEFAULT_BOGONS_IPV4_URL: &str = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv4.txt";
+const DEFAULT_BOGONS_IPV6_URL: &str = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv6.txt";
 
 #[derive(Debug, Deserialize, serde::Serialize)]
 pub struct Config {
@@ -17,6 +19,10 @@ pub struct Config {
     pub l1_url: String,
     #[serde(default)]
     pub l2_url: String,
+    #[serde(default = "default_bogons_ipv4_url")]
+    pub bogons_ipv4_url: String,
+    #[serde(default = "default_bogons_ipv6_url")]
+    pub bogons_ipv6_url: String,
 }
 
 impl Default for Config {
@@ -26,12 +32,22 @@ impl Default for Config {
             path: PathBuf::from("."),
             l1_url: DEFAULT_L1_URL.to_owned(),
             l2_url: DEFAULT_L2_URL.to_owned(),
+            bogons_ipv4_url: default_bogons_ipv4_url(),
+            bogons_ipv6_url: default_bogons_ipv6_url(),
         }
     }
 }
 
 fn default_interval() -> Duration {
     Duration::from_secs(60 * 60)
+}
+
+fn default_bogons_ipv4_url() -> String {
+    DEFAULT_BOGONS_IPV4_URL.to_owned()
+}
+
+fn default_bogons_ipv6_url() -> String {
+    DEFAULT_BOGONS_IPV6_URL.to_owned()
 }
 
 pub async fn load_config(data_dir: &Path) -> Result<Config> {

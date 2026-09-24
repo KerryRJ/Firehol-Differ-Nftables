@@ -6,6 +6,10 @@ use tokio::fs;
 pub(crate) struct Etags {
     pub(crate) l1: Option<String>,
     pub(crate) l2: Option<String>,
+    #[serde(default)]
+    pub(crate) bogons_ipv4: Option<String>,
+    #[serde(default)]
+    pub(crate) bogons_ipv6: Option<String>,
 }
 
 impl Etags {

@@ -29,18 +29,36 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
     let client = reqwest::Client::new();
     let l1_etag = remote_etag(&client, &config.l1_url).await?;
     let l2_etag = remote_etag(&client, &config.l2_url).await?;
+    let bogons_ipv4_etag = remote_etag(&client, &config.bogons_ipv4_url).await?;
+    let bogons_ipv6_etag = remote_etag(&client, &config.bogons_ipv6_url).await?;
 
-    if etags.l1.as_deref() == l1_etag.as_deref() && etags.l2.as_deref() == l2_etag.as_deref() {
+    if l1_etag.is_some()
+        && l2_etag.is_some()
+        && bogons_ipv4_etag.is_some()
+        && bogons_ipv6_etag.is_some()
+        && etags.l1.as_deref() == l1_etag.as_deref()
+        && etags.l2.as_deref() == l2_etag.as_deref()
+        && etags.bogons_ipv4.as_deref() == bogons_ipv4_etag.as_deref()
+        && etags.bogons_ipv6.as_deref() == bogons_ipv6_etag.as_deref()
+    {
         info!("ETags have not changed.");
         return Ok(());
     }
 
-    info!("Downloading the FireHOL level 1 and level 2 ipsets ...");
-    let (l1_remote, l2_remote) = tokio::try_join!(download(&client, &config.l1_url), download(&client, &config.l2_url))?;
+    info!("Downloading FireHOL level 1 and 2 and Team Cymru fullbogons IPv4 and IPv6 lists ...");
+    let (l1_remote, l2_remote, bogons_ipv4_remote, bogons_ipv6_remote) = tokio::try_join!(
+        download(&client, &config.l1_url),
+        download(&client, &config.l2_url),
+        download(&client, &config.bogons_ipv4_url),
+        download(&client, &config.bogons_ipv6_url),
+    )?;
     let l1_local = read_or_empty(&data_dir.join("firehol_level1.netset")).await?;
     let l2_local = read_or_empty(&data_dir.join("firehol_level2.netset")).await?;
+    let bogons_ipv4_local = read_or_empty(&data_dir.join("fullbogons-ipv4.txt")).await?;
+    let bogons_ipv6_local = read_or_empty(&data_dir.join("fullbogons-ipv6.txt")).await?;
 
-    let mut old = Ipset::new().from(&l1_local).from(&l2_local); let mut new = Ipset::new().from(&l1_remote).from(&l2_remote);
+    let mut old = Ipset::new().from(&l1_local).from(&l2_local).from(&bogons_ipv4_local).from(&bogons_ipv6_local);
+    let mut new = Ipset::new().from(&l1_remote).from(&l2_remote).from(&bogons_ipv4_remote).from(&bogons_ipv6_remote);
     old.consolidate(); new.consolidate();
     let mut additions: Vec<_> = new.ips.difference(&old.ips).cloned().collect();
     let mut deletions: Vec<_> = old.ips.difference(&new.ips).cloned().collect();
@@ -49,12 +67,16 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
 
     tokio::try_join!(
         fs::write(data_dir.join("firehol_level1.netset"), &l1_remote),
-        fs::write(data_dir.join("firehol_level2.netset"), &l2_remote)
+        fs::write(data_dir.join("firehol_level2.netset"), &l2_remote),
+        fs::write(data_dir.join("fullbogons-ipv4.txt"), &bogons_ipv4_remote),
+        fs::write(data_dir.join("fullbogons-ipv6.txt"), &bogons_ipv6_remote)
     )?;
-    info!("Remote IPs: L1={} L2={} T={}", rows(&l1_remote), rows(&l2_remote), rows(&l1_remote) + rows(&l2_remote));
+    info!("Remote IPs: L1={} L2={} Bogons4={} Bogons6={} T={}", rows(&l1_remote), rows(&l2_remote), rows(&bogons_ipv4_remote), rows(&bogons_ipv6_remote), rows(&l1_remote) + rows(&l2_remote) + rows(&bogons_ipv4_remote) + rows(&bogons_ipv6_remote));
     info!("Total changes: {total}");
     etags.l1 = l1_etag;
     etags.l2 = l2_etag;
+    etags.bogons_ipv4 = bogons_ipv4_etag;
+    etags.bogons_ipv6 = bogons_ipv6_etag;
     etags.save(data_dir).await?;
     info!("Elapsed time: {:.3} seconds", start.elapsed().as_secs_f64());
     Ok(())
