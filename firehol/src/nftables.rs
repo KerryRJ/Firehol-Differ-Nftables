@@ -8,7 +8,7 @@ use nftables::{
 use std::{borrow::Cow, collections::HashSet, io::Write, process::{Command, Stdio}};
 
 const FAMILY: NfFamily = NfFamily::INet;
-const TABLE: &str = "firehol";
+const TABLE: &str = "iodrive";
 const PREROUTING_CHAIN: &str = "firehol_prerouting";
 const DOWNLOADED_SETS: [(&str, SetType); 4] = [
     ("FireholL1", SetType::Ipv4Addr),

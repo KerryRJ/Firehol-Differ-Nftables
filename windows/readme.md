@@ -69,7 +69,7 @@ whitelist = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
 ```
 
 On Linux, `whitelist` populates `WhitelistIpv4` and
-`WhitelistIPv6` in the `inet firehol` nftables table. The Linux service
+`WhitelistIPv6` in the `inet iodrive` nftables table. The Linux service
 installs the prerouting accept and drop rules after `nftables.service` starts or
 reloads. Set `whitelist = []` to leave both whitelist sets empty.
 
