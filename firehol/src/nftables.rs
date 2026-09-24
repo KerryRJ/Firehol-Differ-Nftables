@@ -89,32 +89,30 @@ fn append_prerouting_rules(commands: &mut Vec<NfObject<'static>>) {
         ..Chain::default()
     }))));
 
-    for (protocol, set) in [
-        ("ip", WHITELIST_IPV4_SET),
-        ("ip", GITHUB_WHITELIST_IPV4_SET),
-        ("ip6", WHITELIST_IPV6_SET),
-        ("ip6", GITHUB_WHITELIST_IPV6_SET),
-    ] {
-        commands.push(rule_object(protocol, set, vec![Statement::Accept(None)]));
+    for set in [WHITELIST_IPV4_SET, GITHUB_WHITELIST_IPV4_SET] {
+        commands.push(rule_object("ip", set, vec![Statement::Accept(None)]));
     }
-    for (protocol, set) in [
-        ("ip", "FullBogonsIpv4"),
-        ("ip", "FireholL1"),
-        ("ip", "FireholL2"),
-        ("ip6", "FullBogonsIpv6"),
-    ] {
-        commands.push(rule_object(protocol, set, vec![
-            Statement::Log(Some(Log {
+    for set in ["FullBogonsIpv4", "FireholL1", "FireholL2"] {
+        commands.push(logged_drop_rule("ip", set));
+    }
+    for set in [WHITELIST_IPV6_SET, GITHUB_WHITELIST_IPV6_SET] {
+        commands.push(rule_object("ip6", set, vec![Statement::Accept(None)]));
+    }
+    commands.push(logged_drop_rule("ip6", "FullBogonsIpv6"));
+}
+
+fn logged_drop_rule(protocol: &str, set: &str) -> NfObject<'static> {
+    rule_object(protocol, set, vec![
+        Statement::Log(Some(Log {
             prefix: Some(Cow::Owned(format!("Blocked Iodrive-{set}: "))),
             group: None,
             snaplen: None,
             queue_threshold: None,
             level: None,
             flags: None,
-            })),
-            Statement::Drop(Some(Drop {})),
-        ]));
-    }
+        })),
+        Statement::Drop(Some(Drop {})),
+    ])
 }
 
 fn rule_object(protocol: &str, set: &str, statements: Vec<Statement<'static>>) -> NfObject<'static> {
@@ -137,6 +135,7 @@ fn rule_object(protocol: &str, set: &str, statements: Vec<Statement<'static>>) -
         comment: None,
     })))
 }
+
 
 fn run_document(commands: Vec<NfObject<'static>>) -> Result<()> {
     let document = Nftables { objects: commands.into() };
