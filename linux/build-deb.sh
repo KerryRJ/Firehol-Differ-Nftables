@@ -61,6 +61,9 @@ fi
 
 install -d -o firehol-differ-nftables -g firehol-differ-nftables -m 0750 \
     /var/lib/firehol-differ-nftables
+chown firehol-differ-nftables:firehol-differ-nftables \
+    /var/lib/firehol-differ-nftables/whitelist-ipv4.txt \
+    /var/lib/firehol-differ-nftables/whitelist-ipv6.txt
 
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload
