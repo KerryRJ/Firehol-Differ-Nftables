@@ -68,10 +68,10 @@ bogons_ipv6_url = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv6.tx
 whitelist = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
 ```
 
-On Linux, `whitelist` populates `firehol_whitelist_ipv4` and
-`firehol_whitelist_ipv6` in the `inet firehol` nftables table. Add rules matching
-these sets before rules matching `firehol_ipv4` or `firehol_ipv6`. Set
-`whitelist = []` to leave both whitelist sets empty.
+On Linux, `whitelist` populates `WhitelistIpv4` and
+`WhitelistIPv6` in the `inet firehol` nftables table. The Linux service
+installs the prerouting accept and drop rules after `nftables.service` starts or
+reloads. Set `whitelist = []` to leave both whitelist sets empty.
 
 Edit `$InstallDir\\config.toml` before starting the service if needed. The `path` setting controls where generated data is written. Its default value of `.` stores
 the ETags, downloaded netsets, and delta files in

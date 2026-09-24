@@ -50,11 +50,14 @@ a systemd drop-in that notifies this service after `nftables.service` loads its
 rules, so the cached sets are restored after nftables restarts or reloads. The
 service needs `CAP_NET_ADMIN` to update its dedicated `inet firehol` table.
 
-The `whitelist` configuration setting populates `firehol_whitelist_ipv4` and
-`firehol_whitelist_ipv6`. In your nftables rules, match these sets before
-the downloaded list sets so whitelisted traffic is accepted before
-blacklist matches. The default whitelist contains `10.0.0.0/8`, `172.16.0.0/12`,
-`192.168.0.0/16`, and `fc00::/7`; set `whitelist = []` to leave them empty.
+The `whitelist` configuration setting populates `WhitelistIpv4` and
+`WhitelistIPv6`. The service installs a `firehol_prerouting` base chain
+in `inet firehol` after `nftables.service` starts or reloads. It accepts packets
+whose source is in the whitelist, then drops packets whose source is in one of
+the downloaded FireHOL or fullbogons sets. It uses the earliest numeric
+prerouting priority so it runs before other prerouting base chains. The default whitelist contains
+`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and `fc00::/7`; set
+`whitelist = []` to leave them empty.
 
 ## Check the nftables sets
 
@@ -71,8 +74,8 @@ sudo nft list set inet firehol FullBogonsIpv4
 sudo nft list set inet firehol FullBogonsIpv6
 sudo nft list set inet firehol FireholL1
 sudo nft list set inet firehol FireholL2
-sudo nft list set inet firehol firehol_whitelist_ipv4
-sudo nft list set inet firehol firehol_whitelist_ipv6
+sudo nft list set inet firehol WhitelistIpv4
+sudo nft list set inet firehol WhitelistIPv6
 ```
 
 Each downloaded list has its own set: `FullBogonsIpv4`, `FullBogonsIpv6`,

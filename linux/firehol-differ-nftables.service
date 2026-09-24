@@ -2,7 +2,9 @@
 Description=FireHOL L1 and L2 Deduplicator and aggregator for NFTables
 After=network-online.target
 Wants=network-online.target
+Requires=nftables.service
 After=nftables.service
+PartOf=nftables.service
 
 [Service]
 Type=simple
