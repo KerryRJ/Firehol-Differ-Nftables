@@ -1,21 +1,23 @@
 use anyhow::{Context, Result, anyhow, ensure};
 use nftables::{
-    expr::{Expression, NamedExpression, Prefix},
-    schema::{Element, NfCmd, NfListObject, NfObject, Nftables, Set, SetFlag, SetType, SetTypeValue, Table},
-    types::NfFamily,
+    expr::{Expression, NamedExpression, Payload, PayloadField, Prefix},
+    schema::{Chain, Element, FlushObject, NfCmd, NfListObject, NfObject, Nftables, Rule, Set, SetFlag, SetType, SetTypeValue, Table},
+    stmt::{Drop, Match, Operator, Statement},
+    types::{NfChainPolicy, NfChainType, NfFamily, NfHook},
 };
 use std::{borrow::Cow, collections::HashSet, io::Write, process::{Command, Stdio}};
 
 const FAMILY: NfFamily = NfFamily::INet;
 const TABLE: &str = "firehol";
+const PREROUTING_CHAIN: &str = "firehol_prerouting";
 const DOWNLOADED_SETS: [(&str, SetType); 4] = [
     ("FireholL1", SetType::Ipv4Addr),
     ("FireholL2", SetType::Ipv4Addr),
     ("FullBogonsIpv4", SetType::Ipv4Addr),
     ("FullBogonsIpv6", SetType::Ipv6Addr),
 ];
-const WHITELIST_IPV4_SET: &str = "firehol_whitelist_ipv4";
-const WHITELIST_IPV6_SET: &str = "firehol_whitelist_ipv6";
+const WHITELIST_IPV4_SET: &str = "WhitelistIPv4";
+const WHITELIST_IPV6_SET: &str = "WhitelistIPv6";
 
 pub(super) fn replace_lists(lists: &[Vec<String>], whitelist: &[String]) -> Result<()> {
     ensure!(lists.len() == DOWNLOADED_SETS.len(), "Expected one entry list per downloaded source");
@@ -30,6 +32,7 @@ pub(super) fn replace_lists(lists: &[Vec<String>], whitelist: &[String]) -> Resu
         commands.extend(named_element_commands(name, &deletions, false)?);
         commands.extend(named_element_commands(name, &additions, true)?);
     }
+    append_prerouting_rules(&mut commands);
     run_document(commands)
 }
 
@@ -52,8 +55,69 @@ fn ensure_table_and_sets() -> Result<()> {
     }
     if !existing.contains(WHITELIST_IPV4_SET) { missing.push(set_command(WHITELIST_IPV4_SET, SetType::Ipv4Addr)); }
     if !existing.contains(WHITELIST_IPV6_SET) { missing.push(set_command(WHITELIST_IPV6_SET, SetType::Ipv6Addr)); }
+    let chains: HashSet<String> = listed["nftables"].as_array().into_iter().flatten()
+        .filter_map(|entry| entry.get("chain").and_then(|chain| chain.get("name")).and_then(serde_json::Value::as_str).map(str::to_owned))
+        .collect();
+    if !chains.contains(PREROUTING_CHAIN) {
+        missing.push(NfObject::CmdObject(NfCmd::Add(NfListObject::Chain(Chain {
+            family: FAMILY,
+            table: TABLE.into(),
+            name: PREROUTING_CHAIN.into(),
+            newname: None,
+            handle: None,
+            _type: Some(NfChainType::Filter),
+            hook: Some(NfHook::Prerouting),
+            // Use the earliest supported priority so this precedes other prerouting chains.
+            prio: Some(i32::MIN),
+            dev: None,
+            policy: Some(NfChainPolicy::Accept),
+        }))));
+    }
     if !missing.is_empty() { run_document(missing)?; }
     Ok(())
+}
+
+fn append_prerouting_rules(commands: &mut Vec<NfObject<'static>>) {
+    commands.push(NfObject::CmdObject(NfCmd::Flush(FlushObject::Chain(Chain {
+        family: FAMILY,
+        table: TABLE.into(),
+        name: PREROUTING_CHAIN.into(),
+        ..Chain::default()
+    }))));
+
+    for (protocol, set) in [("ip", WHITELIST_IPV4_SET), ("ip6", WHITELIST_IPV6_SET)] {
+        commands.push(rule_object(protocol, set, Statement::Accept(None)));
+    }
+    for (protocol, set) in [
+        ("ip", "FireholL1"),
+        ("ip", "FireholL2"),
+        ("ip", "FullBogonsIpv4"),
+        ("ip6", "FullBogonsIpv6"),
+    ] {
+        commands.push(rule_object(protocol, set, Statement::Drop(Some(Drop {}))));
+    }
+}
+
+fn rule_object(protocol: &str, set: &str, verdict: Statement<'static>) -> NfObject<'static> {
+    NfObject::CmdObject(NfCmd::Add(NfListObject::Rule(Rule {
+        family: FAMILY,
+        table: TABLE.into(),
+        chain: PREROUTING_CHAIN.into(),
+        expr: vec![
+            Statement::Match(Match {
+                left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(PayloadField {
+                    protocol: Cow::Owned(protocol.to_owned()),
+                    field: "saddr".into(),
+                }))),
+                right: Expression::String(Cow::Owned(format!("@{set}"))),
+                op: Operator::IN,
+            }),
+            verdict,
+        ].into(),
+        handle: None,
+        index: None,
+        comment: Some(Cow::Owned(format!("FireHOL {set}"))),
+    })))
 }
 
 fn run_document(commands: Vec<NfObject<'static>>) -> Result<()> {
