@@ -113,5 +113,6 @@ sudo systemctl reload firehol-differ-nftables
 sudo apt remove firehol-differ-nftables
 ```
 
-Removing the package stops and disables the service. The configuration and data are
-preserved.
+Removing the package stops and disables the service and removes its `inet iodrive`
+nftables table. The configuration and data are preserved. The uninstall does not
+restart nftables.

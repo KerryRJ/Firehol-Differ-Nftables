@@ -81,6 +81,12 @@ cat > "$STAGE_DIR/DEBIAN/postrm" <<'EOF'
 #!/bin/sh
 set -eu
 
+if [ "${1:-}" = remove ] || [ "${1:-}" = purge ]; then
+    if command -v nft >/dev/null 2>&1; then
+        nft destroy table inet iodrive || echo "Warning: failed to remove nftables table inet iodrive" >&2
+    fi
+fi
+
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload
 fi
