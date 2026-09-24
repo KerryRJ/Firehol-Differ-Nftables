@@ -5,7 +5,7 @@ use nftables::{
     stmt::{Drop, Log, Match, Operator, Statement},
     types::{NfChainPolicy, NfChainType, NfFamily, NfHook},
 };
-use std::{borrow::Cow, collections::HashSet, io::Write, process::{Command, Stdio}};
+use std::{borrow::Cow, collections::HashSet, io::Write, net::IpAddr, process::{Command, Stdio}};
 
 const FAMILY: NfFamily = NfFamily::INet;
 const TABLE: &str = "iodrive";
@@ -186,7 +186,7 @@ fn append_whitelist(commands: &mut Vec<NfObject<'static>>, networks: &[String], 
 
 fn append_whitelist_set(commands: &mut Vec<NfObject<'static>>, name: &str, networks: &[&str], ipv4: bool) -> Result<()> {
     let parsed: Vec<ipnet::IpNet> = networks.iter().map(|value| {
-        value.parse::<ipnet::IpNet>()
+        parse_network(value)
             .map(|net| net.trunc())
             .with_context(|| format!("Invalid whitelist network: {value}"))
     }).collect::<Result<_>>()?;
@@ -224,7 +224,7 @@ fn read_set_elements(name: &str) -> Result<HashSet<String>> {
 fn named_element_commands(name: &str, networks: &[String], add: bool) -> Result<Vec<NfObject<'static>>> {
     let mut commands = Vec::new();
     for value in networks {
-        let network: ipnet::IpNet = value.parse().with_context(|| format!("Invalid network: {value}"))?;
+        let network = parse_network(value).with_context(|| format!("Invalid network: {value}"))?;
         let (addr, len) = match network {
             ipnet::IpNet::V4(net) => (net.network().to_string(), net.prefix_len()),
             ipnet::IpNet::V6(net) => (net.network().to_string(), net.prefix_len()),
@@ -233,4 +233,15 @@ fn named_element_commands(name: &str, networks: &[String], add: bool) -> Result<
         commands.push(NfObject::CmdObject(if add { NfCmd::Add(NfListObject::Element(element)) } else { NfCmd::Delete(NfListObject::Element(element)) }));
     }
     Ok(commands)
+}
+
+fn parse_network(value: &str) -> Result<ipnet::IpNet> {
+    if let Ok(network) = value.parse::<ipnet::IpNet>() {
+        return Ok(network);
+    }
+    match value.parse::<IpAddr>() {
+        Ok(IpAddr::V4(address)) => Ok(ipnet::IpNet::V4(ipnet::Ipv4Net::new(address, 32)?)),
+        Ok(IpAddr::V6(address)) => Ok(ipnet::IpNet::V6(ipnet::Ipv6Net::new(address, 128)?)),
+        Err(_) => value.parse::<ipnet::IpNet>().map_err(Into::into),
+    }
 }
