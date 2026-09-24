@@ -2,6 +2,7 @@
 Description=FireHOL L1 and L2 Deduplicator and aggregator for NFTables
 After=network-online.target
 Wants=network-online.target
+After=nftables.service
 
 [Service]
 Type=simple
@@ -9,6 +10,9 @@ ExecStart=/usr/bin/firehol-differ-nftables
 ExecReload=/bin/kill -HUP $MAINPID
 User=firehol-differ-nftables
 Group=firehol-differ-nftables
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+ExecStartPost=/bin/sh -c 'systemctl is-active --quiet nftables.service && systemctl kill --signal=SIGUSR1 firehol-differ-nftables.service || true'
 StateDirectory=firehol-differ-nftables
 StateDirectoryMode=0750
 LogsDirectory=firehol-differ-nftables

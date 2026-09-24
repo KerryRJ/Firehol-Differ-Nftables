@@ -65,7 +65,13 @@ l1_url = "https://iplists.firehol.org/files/firehol_level1.netset"
 l2_url = "https://iplists.firehol.org/files/firehol_level2.netset"
 bogons_ipv4_url = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv4.txt"
 bogons_ipv6_url = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv6.txt"
+whitelist = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
 ```
+
+On Linux, `whitelist` populates `firehol_whitelist_ipv4` and
+`firehol_whitelist_ipv6` in the `inet firehol` nftables table. Add rules matching
+these sets before rules matching `firehol_ipv4` or `firehol_ipv6`. Set
+`whitelist = []` to leave both whitelist sets empty.
 
 Edit `$InstallDir\\config.toml` before starting the service if needed. The `path` setting controls where generated data is written. Its default value of `.` stores
 the ETags, downloaded netsets, and delta files in

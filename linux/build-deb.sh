@@ -21,9 +21,11 @@ install -d \
     "$STAGE_DIR/DEBIAN" \
     "$STAGE_DIR/usr/bin" \
     "$STAGE_DIR/usr/lib/systemd/system" \
+    "$STAGE_DIR/usr/lib/systemd/system/nftables.service.d" \
     "$STAGE_DIR/etc/firehol-differ-nftables"
 install -m 0755 "$REPO_ROOT/target/release/firehol-differ-nftables" "$STAGE_DIR/usr/bin/firehol-differ-nftables"
 install -m 0644 "$SCRIPT_DIR/firehol-differ-nftables.service" "$STAGE_DIR/usr/lib/systemd/system/firehol-differ-nftables.service"
+install -m 0644 "$SCRIPT_DIR/nftables-firehol.conf" "$STAGE_DIR/usr/lib/systemd/system/nftables.service.d/firehol-differ-nftables.conf"
 sed 's|^path = .*|path = "/var/lib/firehol-differ-nftables"|' \
     "$REPO_ROOT/config.toml" > "$STAGE_DIR/etc/firehol-differ-nftables/config.toml"
 

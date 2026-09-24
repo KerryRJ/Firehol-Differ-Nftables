@@ -9,7 +9,7 @@ const DEFAULT_L2_URL: &str = "https://iplists.firehol.org/files/firehol_level2.n
 const DEFAULT_BOGONS_IPV4_URL: &str = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv4.txt";
 const DEFAULT_BOGONS_IPV6_URL: &str = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv6.txt";
 
-#[derive(Debug, Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 pub struct Config {
     #[serde(default = "default_interval", with = "humantime_serde")]
     pub interval: Duration,
@@ -23,6 +23,8 @@ pub struct Config {
     pub bogons_ipv4_url: String,
     #[serde(default = "default_bogons_ipv6_url")]
     pub bogons_ipv6_url: String,
+    #[serde(default = "default_whitelist")]
+    pub whitelist: Vec<String>,
 }
 
 impl Default for Config {
@@ -34,6 +36,7 @@ impl Default for Config {
             l2_url: DEFAULT_L2_URL.to_owned(),
             bogons_ipv4_url: default_bogons_ipv4_url(),
             bogons_ipv6_url: default_bogons_ipv6_url(),
+            whitelist: default_whitelist(),
         }
     }
 }
@@ -50,6 +53,13 @@ fn default_bogons_ipv6_url() -> String {
     DEFAULT_BOGONS_IPV6_URL.to_owned()
 }
 
+fn default_whitelist() -> Vec<String> {
+    ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+}
+
 pub async fn load_config(data_dir: &Path) -> Result<Config> {
     let path = data_dir.join("config.toml");
     let config = match fs::read_to_string(&path).await {
@@ -63,5 +73,9 @@ pub async fn load_config(data_dir: &Path) -> Result<Config> {
     let config: Config = toml::from_str(&config)
         .with_context(|| format!("Failed to parse {}", path.display()))?;
     anyhow::ensure!(!config.interval.is_zero(), "interval must be greater than zero");
+    for network in &config.whitelist {
+        network.parse::<ipnet::IpNet>()
+            .with_context(|| format!("Invalid whitelist network: {network}"))?;
+    }
     Ok(config)
 }

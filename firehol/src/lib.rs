@@ -1,6 +1,8 @@
 mod config;
 mod etags;
 mod ipset;
+#[cfg(target_os = "linux")]
+mod nftables;
 
 pub use config::{load_config, Config};
 use anyhow::Result;
@@ -65,6 +67,9 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
     additions.sort(); deletions.sort();
     let total = additions.len() + deletions.len();
 
+    #[cfg(target_os = "linux")]
+    nftables::apply(&additions, &deletions, &config.whitelist)?;
+
     tokio::try_join!(
         fs::write(data_dir.join("firehol_level1.netset"), &l1_remote),
         fs::write(data_dir.join("firehol_level2.netset"), &l2_remote),
@@ -80,6 +85,22 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
     etags.save(data_dir).await?;
     info!("Elapsed time: {:.3} seconds", start.elapsed().as_secs_f64());
     Ok(())
+}
+
+/// Rebuild the nftables sets from the last successfully downloaded lists.
+/// This is used after a reboot or an nftables ruleset reload.
+#[cfg(target_os = "linux")]
+pub async fn restore_cached(data_dir: &Path, config: &Config) -> Result<()> {
+    let l1 = read_or_empty(&data_dir.join("firehol_level1.netset")).await?;
+    let l2 = read_or_empty(&data_dir.join("firehol_level2.netset")).await?;
+    let bogons_ipv4 = read_or_empty(&data_dir.join("fullbogons-ipv4.txt")).await?;
+    let bogons_ipv6 = read_or_empty(&data_dir.join("fullbogons-ipv6.txt")).await?;
+
+    let mut networks = Ipset::new().from(&l1).from(&l2).from(&bogons_ipv4).from(&bogons_ipv6);
+    networks.consolidate();
+    let mut networks: Vec<_> = networks.ips.into_iter().collect();
+    networks.sort();
+    nftables::replace_elements(&networks, &config.whitelist)
 }
 
 async fn remote_etag(client: &reqwest::Client, url: &str) -> Result<Option<String>> {

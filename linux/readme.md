@@ -44,6 +44,18 @@ The service runs as `firehol-differ-nftables`, reads its configuration from
 `/etc/firehol-differ-nftables/config.toml`, and writes generated data to
 `/var/lib/firehol-differ-nftables`.
 
+The latest successfully downloaded lists are reconciled into the nftables sets
+when the service starts and after each scheduled fetch. The package also installs
+a systemd drop-in that notifies this service after `nftables.service` loads its
+rules, so the cached sets are restored after nftables restarts or reloads. The
+service needs `CAP_NET_ADMIN` to update its dedicated `inet firehol` table.
+
+The `whitelist` configuration setting populates `firehol_whitelist_ipv4` and
+`firehol_whitelist_ipv6`. In your nftables rules, match these sets before
+`firehol_ipv4` and `firehol_ipv6` so whitelisted traffic is accepted before
+blacklist matches. The default whitelist contains `10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`, and `fc00::/7`; set `whitelist = []` to leave them empty.
+
 Check its status and logs with:
 
 ```sh

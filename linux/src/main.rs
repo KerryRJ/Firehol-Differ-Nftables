@@ -12,7 +12,7 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(unix)]
 mod service {
 use anyhow::{Context, Result};
-use firehol::{load_config, run_scheduler};
+use firehol::{load_config, restore_cached, run_once, run_scheduler};
 use log::info;
 use std::{fs, path::Path};
 use tokio_util::sync::CancellationToken;
@@ -35,12 +35,19 @@ pub async fn run() -> Result<()> {
     init_logging()?;
     let mut reload = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
         .context("Failed to listen for reload signal")?;
+    let mut nftables_reload = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
+        .context("Failed to listen for nftables reload notification")?;
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .context("Failed to listen for shutdown signal")?;
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
         .context("Failed to listen for interrupt signal")?;
 
-    let mut scheduler = start_scheduler().await?;
+    let initial_config = load_config(Path::new(".")).await?;
+    let mut restore_data_dir = initial_config.path.clone();
+    if let Err(error) = restore_cached(&restore_data_dir, &initial_config).await {
+        log::warn!("Could not restore cached nftables sets at startup: {error:#}");
+    }
+    let mut scheduler = start_scheduler(initial_config.clone()).await?;
     loop {
         tokio::select! {
             result = &mut scheduler.task => {
@@ -49,16 +56,29 @@ pub async fn run() -> Result<()> {
             }
             _ = reload.recv() => {
                 info!("Received reload signal; reloading configuration");
-                let new_scheduler = match start_scheduler().await {
-                    Ok(scheduler) => scheduler,
+                let new_config = match load_config(Path::new(".")).await {
+                    Ok(config) => config,
                     Err(error) => {
                         log::error!("Failed to reload configuration; keeping current scheduler: {error:#}");
                         continue;
                     }
                 };
+                let new_data_dir = new_config.path.clone();
+                let new_scheduler = start_scheduler(new_config.clone()).await?;
                 scheduler.cancellation.cancel();
                 scheduler.task.await.context("Scheduler task failed during reload")??;
                 scheduler = new_scheduler;
+                restore_data_dir = new_data_dir;
+                if let Err(error) = restore_cached(&restore_data_dir, &new_config).await {
+                    log::error!("Failed to restore cached nftables sets after config reload: {error:#}");
+                }
+            }
+            _ = nftables_reload.recv() => {
+                info!("Received nftables reload notification; restoring cached sets");
+                let config = load_config(Path::new(".")).await?;
+                if let Err(error) = restore_cached(&restore_data_dir, &config).await {
+                    log::error!("Failed to restore cached nftables sets: {error:#}");
+                }
             }
             _ = terminate.recv() => {
                 info!("Received termination signal; shutting down");
@@ -80,11 +100,15 @@ struct Scheduler {
     task: tokio::task::JoinHandle<Result<()>>,
 }
 
-async fn start_scheduler() -> Result<Scheduler> {
-    let config = load_config(Path::new(".")).await?;
+async fn start_scheduler(config: firehol::Config) -> Result<Scheduler> {
     let data_dir = config.path.clone();
     let cancellation = CancellationToken::new();
-    let task = tokio::spawn(run_scheduler(data_dir, config, cancellation.clone()));
+    let task_cancellation = cancellation.clone();
+    let scheduler_data_dir = data_dir.clone();
+    let task = tokio::spawn(async move {
+        run_once(&scheduler_data_dir, &config).await?;
+        run_scheduler(scheduler_data_dir, config, task_cancellation).await
+    });
     Ok(Scheduler { cancellation, task })
 }
 }
