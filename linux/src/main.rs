@@ -47,7 +47,8 @@ pub async fn run() -> Result<()> {
     if let Err(error) = restore_cached(&restore_data_dir, &initial_config).await {
         log::warn!("Could not restore cached nftables sets at startup: {error:#}");
     }
-    let mut scheduler = start_scheduler(initial_config.clone()).await?;
+    let mut active_config = initial_config.clone();
+    let mut scheduler = start_scheduler(active_config.clone()).await?;
     loop {
         tokio::select! {
             result = &mut scheduler.task => {
@@ -64,13 +65,15 @@ pub async fn run() -> Result<()> {
                     }
                 };
                 let new_data_dir = new_config.path.clone();
-                if let Err(error) = restore_cached(&new_data_dir, &new_config).await {
-                    log::error!("Failed to apply reloaded configuration to cached nftables sets: {error:#}");
-                }
-                let new_scheduler = start_scheduler(new_config.clone()).await?;
                 scheduler.cancellation.cancel();
                 scheduler.task.await.context("Scheduler task failed during reload")??;
-                scheduler = new_scheduler;
+                if let Err(error) = restore_cached(&new_data_dir, &new_config).await {
+                    log::error!("Failed to apply reloaded configuration to cached nftables sets: {error:#}");
+                    scheduler = start_scheduler(active_config.clone()).await?;
+                    continue;
+                }
+                active_config = new_config.clone();
+                scheduler = start_scheduler(new_config).await?;
                 restore_data_dir = new_data_dir;
             }
             _ = nftables_reload.recv() => {
