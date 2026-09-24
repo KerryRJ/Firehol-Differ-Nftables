@@ -89,11 +89,10 @@ fn append_prerouting_rules(commands: &mut Vec<NfObject<'static>>) {
         ..Chain::default()
     }))));
 
-    for (protocol, set) in [("ip", WHITELIST_IPV4_SET), ("ip6", WHITELIST_IPV6_SET)] {
-        commands.push(rule_object(protocol, set, vec![Statement::Accept(None)]));
-    }
     for (protocol, set) in [
+        ("ip", WHITELIST_IPV4_SET),
         ("ip", GITHUB_WHITELIST_IPV4_SET),
+        ("ip6", WHITELIST_IPV6_SET),
         ("ip6", GITHUB_WHITELIST_IPV6_SET),
     ] {
         commands.push(rule_object(protocol, set, vec![Statement::Accept(None)]));
