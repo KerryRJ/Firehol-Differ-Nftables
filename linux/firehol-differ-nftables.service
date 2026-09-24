@@ -1,0 +1,20 @@
+[Unit]
+Description=FireHOL L1 and L2 Deduplicator and aggregator for NFTables
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/firehol-differ-nftables
+ExecReload=/bin/kill -HUP $MAINPID
+User=firehol-differ-nftables
+Group=firehol-differ-nftables
+StateDirectory=firehol-differ-nftables
+StateDirectoryMode=0750
+LogsDirectory=firehol-differ-nftables
+WorkingDirectory=/etc/firehol-differ-nftables
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

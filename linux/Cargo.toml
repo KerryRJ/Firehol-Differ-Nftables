@@ -1,0 +1,21 @@
+[package]
+name = "linux"
+version.workspace = true
+edition.workspace = true
+authors = { workspace = true }
+license = { workspace = true }
+description = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[[bin]]
+name = "firehol-differ-nftables"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+env_logger = { workspace = true }
+firehol = { package = "firehol", path = "../firehol" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "signal-hook-registry", "rt"] }
+tokio-util = { workspace = true, features = ["rt"] }
+log = { workspace = true }

@@ -1,0 +1,135 @@
+name: Linux service
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build on Ubuntu 26.04
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Linux service
+        run: ./linux/build-deb.sh
+
+      - name: Validate Debian package
+        run: |
+          package=$(find target/debian -name '*.deb' -print -quit)
+          test -n "$package"
+          dpkg-deb --info "$package"
+          dpkg-deb --contents "$package"
+
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v6
+        with:
+          name: firehol-differ-nftables-ubuntu-26.04
+          path: target/debian/*.deb
+          if-no-files-found: error
+          retention-days: 30
+
+  windows:
+    name: Build Windows service
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Windows service
+        run: cargo build --locked --release -p windows
+
+      - name: Install WiX Toolset
+        run: dotnet tool install --global wix --version 7.0.0
+
+      - name: Build Windows MSI
+        shell: pwsh
+        run: |
+          wix eula accept wix7
+          wix extension add WixToolset.UI.wixext/7.0.0
+          wix extension add WixToolset.Util.wixext/7.0.0
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches.Groups[1].Value
+          wix build windows/wix/main.wxs `
+            -acceptEula wix7 `
+            -ext WixToolset.UI.wixext `
+            -ext WixToolset.Util.wixext `
+            -arch x64 `
+            -d CargoTargetBinDir="$((Resolve-Path target/release).Path)" `
+            -d Version="$version" `
+            -o target/release/firehol-differ-nftables-windows-x64.msi
+
+      - name: Upload Windows service artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: firehol-differ-nftables-windows-x64
+          path: |
+            target/release/firehol-differ-nftables.exe
+            target/release/firehol-differ-nftables-windows-x64.msi
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub release
+    if: github.ref == 'refs/heads/master'
+    needs: [build, windows]
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Replace version tag and release
+        id: release-tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ -z "$version" ]; then
+            echo "Could not read the workspace version from Cargo.toml" >&2
+            exit 1
+          fi
+
+          tag="v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq '.id' 2>/dev/null); then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
+          fi
+          if git ls-remote --exit-code --refs origin "refs/tags/$tag" >/dev/null 2>&1; then
+            git push origin --delete "$tag"
+          fi
+          git tag -f "$tag" "$GITHUB_SHA"
+          git push origin "refs/tags/$tag"
+
+      - name: Download Ubuntu package
+        uses: actions/download-artifact@v8
+        with:
+          name: firehol-differ-nftables-ubuntu-26.04
+          path: dist/ubuntu
+
+      - name: Download Windows packages
+        uses: actions/download-artifact@v8
+        with:
+          name: firehol-differ-nftables-windows-x64
+          path: dist/windows
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.release-tag.outputs.tag }}
+          files: |
+            dist/ubuntu/firehol-differ-nftables-linux-amd64.deb
+            dist/windows/firehol-differ-nftables.exe
+            dist/windows/firehol-differ-nftables-windows-x64.msi

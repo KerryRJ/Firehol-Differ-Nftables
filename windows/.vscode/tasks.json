@@ -1,0 +1,11 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build Firehol Windows Installer",
+			"type": "shell",
+			"command": "msbuild firehol/wix/firehol.wixproj /p:Configuration=Release /p:Platform=x64",
+			"args": []
+		}
+	]
+}

@@ -1,0 +1,4 @@
+interval = "1h"
+path = "."
+l1_url = "https://iplists.firehol.org/files/firehol_level1.netset"
+l2_url = "https://iplists.firehol.org/files/firehol_level2.netset"

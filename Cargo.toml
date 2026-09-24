@@ -1,0 +1,23 @@
+[workspace]
+members = [
+    "firehol",
+    "linux",
+    "windows"
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Kerry Jones <kerry@iodrive.co.za>"]
+license = "GPL-3.0"
+description = "Firehol L1 and L2 lists are dedpulicated, aggregated, and then exported as a nftables difference file."
+homepage = "https://iodrive.co.za/firehol-differ-nftables"
+repository = "https://github.com/KerryRJ/firehol-differ-nftables"
+
+[workspace.dependencies]
+anyhow = "1.0"
+env_logger = "0.11"
+log = "0.4"
+tokio = "1.53"
+tokio-util = "0.7"
