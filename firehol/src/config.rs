@@ -23,7 +23,7 @@ pub struct Config {
     pub bogons_ipv4_url: String,
     #[serde(default = "default_bogons_ipv6_url")]
     pub bogons_ipv6_url: String,
-    #[serde(default)]
+    #[serde(skip)]
     pub whitelist: Vec<String>,
     #[serde(default = "default_log_blocked")]
     pub log_blocked: bool,
@@ -70,12 +70,31 @@ pub async fn load_config(data_dir: &Path) -> Result<Config> {
         ),
         Err(error) => return Err(error).with_context(|| format!("Failed to read {}", path.display())),
     };
-    let config: Config = toml::from_str(&config)
+    let mut config: Config = toml::from_str(&config)
         .with_context(|| format!("Failed to parse {}", path.display()))?;
     anyhow::ensure!(!config.interval.is_zero(), "interval must be greater than zero");
-    for network in &config.whitelist {
-        network.parse::<ipnet::IpNet>()
-            .with_context(|| format!("Invalid whitelist network: {network}"))?;
+    for (filename, ipv4) in [("whitelist-ipv4.txt", true), ("whitelist-ipv6.txt", false)] {
+        let list_path = data_dir.join(filename);
+        let list = match fs::read_to_string(&list_path).await {
+            Ok(list) => list,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => anyhow::bail!(
+                "Whitelist file {} does not exist",
+                list_path.display()
+            ),
+            Err(error) => return Err(error).with_context(|| format!("Failed to read {}", list_path.display())),
+        };
+        for (line_number, line) in list.lines().enumerate() {
+            let network = line.split('#').next().unwrap_or_default().trim();
+            if network.is_empty() {
+                continue;
+            }
+            let parsed = network.parse::<ipnet::IpNet>()
+                .with_context(|| format!("Invalid network in {} at line {}", list_path.display(), line_number + 1))?;
+            anyhow::ensure!(parsed.addr().is_ipv4() == ipv4,
+                "Wrong address family in {} at line {}",
+                list_path.display(), line_number + 1);
+            config.whitelist.push(network.to_owned());
+        }
     }
     Ok(config)
 }

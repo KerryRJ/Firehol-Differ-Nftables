@@ -65,16 +65,19 @@ l1_url = "https://iplists.firehol.org/files/firehol_level1.netset"
 l2_url = "https://iplists.firehol.org/files/firehol_level2.netset"
 bogons_ipv4_url = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv4.txt"
 bogons_ipv6_url = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv6.txt"
-whitelist = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
 log_blocked = false
 ```
 
-On Linux, `whitelist` populates `WhitelistIpv4` and
+The installer places `whitelist-ipv4.txt` and `whitelist-ipv6.txt` beside
+`config.toml`. Put one CIDR network per line in the matching file; blank lines
+and `#` comments are ignored.
+
+On Linux, the whitelist files populate `WhitelistIpv4` and
 `WhitelistIPv6` in the `inet iodrive` nftables table. The Linux service also
 downloads all published CIDR ranges from GitHub's Meta API, checks its ETag,
 and maintains `GithubWhitelistIPv4` and `GithubWhitelistIPv6`. It installs the
 prerouting accept and drop rules after `nftables.service` starts or reloads.
-Set `whitelist = []` to leave the configurable whitelist sets empty.
+Leave both whitelist files empty to leave the configurable whitelist sets empty.
 Set `log_blocked = true` to log packets matched by blacklist drop rules; it is
 off by default.
 

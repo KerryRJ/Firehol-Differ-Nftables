@@ -144,6 +144,8 @@
                     <Component Id="ServiceExecutable" Guid="B83F2D61-94A7-4C10-8E35-2F6A1D9C704B">
                             <File Id="FireholWindowsExe" Name="firehol-differ-nftables.exe" DiskId="1" Source="$(var.CargoTargetBinDir)\firehol-differ-nftables.exe" KeyPath="yes" />
                             <File Id="FireholConfigFile" Name="config.toml" DiskId="1" Source="config.toml" />
+                            <File Id="WhitelistIpv4File" Name="whitelist-ipv4.txt" DiskId="1" Source="whitelist-ipv4.txt" />
+                            <File Id="WhitelistIpv6File" Name="whitelist-ipv6.txt" DiskId="1" Source="whitelist-ipv6.txt" />
                             <ServiceInstall Id="FireholServiceInstall" Name="firehol-differ-nftables" DisplayName="FireHOL IP Deduplicator and Aggregator" Description="Downloads and aggregates FireHOL IP lists on a schedule." Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" />
                             <ServiceControl Id="FireholServiceControl" Name="firehol-differ-nftables" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
                     </Component>
