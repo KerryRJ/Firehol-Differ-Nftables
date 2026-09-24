@@ -12,7 +12,7 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(unix)]
 mod service {
 use anyhow::{Context, Result};
-use firehol::{load_config, restore_cached, run_once, run_scheduler};
+use firehol::{load_config, restore_cached, run_scheduler};
 use log::info;
 use std::{fs, path::Path};
 use tokio_util::sync::CancellationToken;
@@ -104,10 +104,8 @@ async fn start_scheduler(config: firehol::Config) -> Result<Scheduler> {
     let data_dir = config.path.clone();
     let cancellation = CancellationToken::new();
     let task_cancellation = cancellation.clone();
-    let scheduler_data_dir = data_dir.clone();
     let task = tokio::spawn(async move {
-        run_once(&scheduler_data_dir, &config).await?;
-        run_scheduler(scheduler_data_dir, config, task_cancellation).await
+        run_scheduler(data_dir, config, task_cancellation).await
     });
     Ok(Scheduler { cancellation, task })
 }

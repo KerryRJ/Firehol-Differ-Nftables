@@ -50,7 +50,7 @@ a systemd drop-in that notifies this service after `nftables.service` loads its
 rules, so the cached sets are restored after nftables restarts or reloads. The
 service needs `CAP_NET_ADMIN` to update its dedicated `inet iodrive` table.
 
-The `whitelist` configuration setting populates `WhitelistIpv4` and
+The `whitelist` configuration setting populates `WhitelistIPv4` and
 `WhitelistIPv6`. The service installs a `firehol_prerouting` base chain
 in `inet iodrive` after `nftables.service` starts or reloads. It accepts packets
 whose source is in the whitelist, then drops packets whose source is in one of
@@ -82,7 +82,7 @@ sudo nft list set inet iodrive FullBogonsIpv4
 sudo nft list set inet iodrive FullBogonsIpv6
 sudo nft list set inet iodrive FireholL1
 sudo nft list set inet iodrive FireholL2
-sudo nft list set inet iodrive WhitelistIpv4
+sudo nft list set inet iodrive WhitelistIPv4
 sudo nft list set inet iodrive WhitelistIPv6
 sudo nft list set inet iodrive GithubWhitelistIPv4
 sudo nft list set inet iodrive GithubWhitelistIPv6

@@ -9,7 +9,7 @@ pub use config::{load_config, Config};
 use anyhow::{Context, Result, ensure};
 use etags::Etags;
 use ipset::Ipset;
-use log::info;
+use log::{error, info};
 use std::{collections::HashSet, path::{Path, PathBuf}};
 use std::time::Instant;
 use tokio::fs;
@@ -22,7 +22,11 @@ pub async fn run_scheduler(data_dir: PathBuf, config: Config, cancellation: Canc
     loop {
         tokio::select! {
             _ = cancellation.cancelled() => return Ok(()),
-            _ = ticker.tick() => run_once(&data_dir, &config).await?,
+            _ = ticker.tick() => {
+                if let Err(error) = run_once(&data_dir, &config).await {
+                    error!("Scheduled download/update failed; will retry: {error:#}");
+                }
+            }
         }
     }
 }
@@ -189,11 +193,12 @@ fn collect_ip_ranges(value: &serde_json::Value, ranges: &mut HashSet<String>) {
 }
 
 async fn remote_etag(client: &reqwest::Client, url: &str) -> Result<Option<String>> {
-    Ok(client.head(url).send().await?.headers().get(reqwest::header::ETAG).map(|h| h.to_str().map(str::to_owned)).transpose()?)
+    let response = client.head(url).send().await?.error_for_status()?;
+    Ok(response.headers().get(reqwest::header::ETAG).map(|h| h.to_str().map(str::to_owned)).transpose()?)
 }
 
 async fn download(client: &reqwest::Client, url: &str) -> Result<String> {
-    Ok(client.get(url).send().await?.text().await?)
+    Ok(client.get(url).send().await?.error_for_status()?.text().await?)
 }
 
 async fn read_or_empty(path: &Path) -> Result<String> {

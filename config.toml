@@ -4,5 +4,5 @@ l1_url = "https://iplists.firehol.org/files/firehol_level1.netset"
 l2_url = "https://iplists.firehol.org/files/firehol_level2.netset"
 bogons_ipv4_url = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv4.txt"
 bogons_ipv6_url = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv6.txt"
-whitelist = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
+whitelist = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7", "127.0.0.1", "127.0.0.53", "fe80::/10"]
 log_blocked = false

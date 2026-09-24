@@ -23,7 +23,7 @@ pub struct Config {
     pub bogons_ipv4_url: String,
     #[serde(default = "default_bogons_ipv6_url")]
     pub bogons_ipv6_url: String,
-    #[serde(default = "default_whitelist")]
+    #[serde(default)]
     pub whitelist: Vec<String>,
     #[serde(default = "default_log_blocked")]
     pub log_blocked: bool,
@@ -38,7 +38,7 @@ impl Default for Config {
             l2_url: DEFAULT_L2_URL.to_owned(),
             bogons_ipv4_url: default_bogons_ipv4_url(),
             bogons_ipv6_url: default_bogons_ipv6_url(),
-            whitelist: default_whitelist(),
+            whitelist: Vec::new(),
             log_blocked: default_log_blocked(),
         }
     }
@@ -54,13 +54,6 @@ fn default_bogons_ipv4_url() -> String {
 
 fn default_bogons_ipv6_url() -> String {
     DEFAULT_BOGONS_IPV6_URL.to_owned()
-}
-
-fn default_whitelist() -> Vec<String> {
-    ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
-        .into_iter()
-        .map(str::to_owned)
-        .collect()
 }
 
 fn default_log_blocked() -> bool {
