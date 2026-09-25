@@ -213,11 +213,19 @@ pub(super) fn replace_lists(
         let deletions = current_refs.difference(&desired).count();
         let after_count = current.len() + additions - deletions;
         info!("nftables set {name}: before={} additions={additions} deletions={deletions} after={after_count}", current.len());
-        for network in current.iter().filter(|network| !desired.contains(network.as_str())) {
-            commands.extend(named_element_commands(name, std::slice::from_ref(network), false)?);
+        let deletions: Vec<&str> = current.iter()
+            .filter(|network| !desired.contains(network.as_str()))
+            .map(String::as_str)
+            .collect();
+        let additions: Vec<&str> = networks.iter()
+            .filter(|network| !current_refs.contains(network.as_str()))
+            .map(String::as_str)
+            .collect();
+        if let Some(command) = named_element_command(name, &deletions, false)? {
+            commands.push(command);
         }
-        for network in networks.iter().filter(|network| !current_refs.contains(network.as_str())) {
-            commands.extend(named_element_commands(name, std::slice::from_ref(network), true)?);
+        if let Some(command) = named_element_command(name, &additions, true)? {
+            commands.push(command);
         }
     }
     append_prerouting_rules(&mut commands, log_blocked);
@@ -421,7 +429,10 @@ fn append_whitelist_set(commands: &mut Vec<NfObject<'static>>, name: &str, netwo
         comment: None,
     })))));
     let desired: Vec<_> = desired.into_iter().collect();
-    commands.extend(named_element_commands(name, &desired, true)?);
+    let desired_refs: Vec<_> = desired.iter().map(String::as_str).collect();
+    if let Some(command) = named_element_command(name, &desired_refs, true)? {
+        commands.push(command);
+    }
     Ok(())
 }
 
@@ -451,18 +462,33 @@ fn read_set_elements(name: &str) -> Result<HashSet<String>> {
     Ok(networks)
 }
 
-fn named_element_commands(name: &str, networks: &[String], add: bool) -> Result<Vec<NfObject<'static>>> {
-    let mut commands = Vec::new();
+fn named_element_command(name: &str, networks: &[&str], add: bool) -> Result<Option<NfObject<'static>>> {
+    if networks.is_empty() {
+        return Ok(None);
+    }
+    let mut elements = Vec::with_capacity(networks.len());
     for value in networks {
         let network = parse_network(value).with_context(|| format!("Invalid network: {value}"))?;
         let (addr, len) = match network {
             ipnet::IpNet::V4(net) => (net.network().to_string(), net.prefix_len()),
             ipnet::IpNet::V6(net) => (net.network().to_string(), net.prefix_len()),
         };
-        let element = Element { family: FAMILY, table: TABLE.into(), name: Cow::Owned(name.to_owned()), elem: vec![Expression::Named(NamedExpression::Prefix(Prefix { addr: Box::new(Expression::String(Cow::Owned(addr))), len: len.into() }))].into() };
-        commands.push(NfObject::CmdObject(if add { NfCmd::Add(NfListObject::Element(element)) } else { NfCmd::Delete(NfListObject::Element(element)) }));
+        elements.push(Expression::Named(NamedExpression::Prefix(Prefix {
+            addr: Box::new(Expression::String(Cow::Owned(addr))),
+            len: len.into(),
+        })));
     }
-    Ok(commands)
+    let element = Element {
+        family: FAMILY,
+        table: TABLE.into(),
+        name: Cow::Owned(name.to_owned()),
+        elem: elements.into(),
+    };
+    Ok(Some(NfObject::CmdObject(if add {
+        NfCmd::Add(NfListObject::Element(element))
+    } else {
+        NfCmd::Delete(NfListObject::Element(element))
+    })))
 }
 
 fn parse_network(value: &str) -> Result<ipnet::IpNet> {
