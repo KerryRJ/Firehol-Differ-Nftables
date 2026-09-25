@@ -16,7 +16,7 @@ struct TableListing<'a> {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase", bound(deserialize = "'de: 'a"))]
 enum ListingEntry<'a> {
     Set(ListedSet<'a>),
     Chain(ListedChain<'a>),
@@ -43,7 +43,7 @@ struct SetListing<'a> {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase", bound(deserialize = "'de: 'a"))]
 enum SetListingEntry<'a> {
     Set(ListedElements<'a>),
     #[serde(other)]
@@ -57,7 +57,7 @@ struct ListedElements<'a> {
 }
 
 #[derive(Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, bound(deserialize = "'de: 'a"))]
 enum ListedElement<'a> {
     Prefix { prefix: ListedPrefix<'a> },
     Address(Cow<'a, str>),
