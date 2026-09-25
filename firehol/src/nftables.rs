@@ -7,7 +7,7 @@ use nftables::{
     types::{NfChainPolicy, NfChainType, NfFamily, NfHook},
 };
 use serde::Deserialize;
-use std::{borrow::Cow, collections::HashSet, io::Write, net::IpAddr, process::{Command, Stdio}};
+use std::{borrow::Cow, collections::HashSet, net::IpAddr, process::{Command, Stdio}};
 
 #[derive(Deserialize)]
 struct TableListing {
@@ -83,12 +83,93 @@ struct ListedElements<'a> {
     elem: Option<Vec<ListedElement<'a>>>,
 }
 
-#[derive(Deserialize)]
-#[serde(untagged, bound(deserialize = "'de: 'a"))]
 enum ListedElement<'a> {
-    Prefix { prefix: ListedPrefix<'a> },
+    Prefix(ListedPrefix<'a>),
     Address(Cow<'a, str>),
-    Other(serde::de::IgnoredAny),
+    Other,
+}
+
+impl<'de, 'a> Deserialize<'de> for ListedElement<'a>
+where
+    'de: 'a,
+{
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ElementVisitor<'a>(std::marker::PhantomData<&'a ()>);
+
+        impl<'de, 'a> serde::de::Visitor<'de> for ElementVisitor<'a>
+        where
+            'de: 'a,
+        {
+            type Value = ListedElement<'a>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an nftables set element")
+            }
+
+            fn visit_borrowed_str<E>(self, value: &'de str) -> std::result::Result<Self::Value, E> {
+                Ok(ListedElement::Address(Cow::Borrowed(value)))
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(ListedElement::Address(Cow::Owned(value.to_owned())))
+            }
+
+            fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E> {
+                Ok(ListedElement::Address(Cow::Owned(value)))
+            }
+
+            fn visit_map<M>(self, mut map: M) -> std::result::Result<Self::Value, M::Error>
+            where
+                M: serde::de::MapAccess<'de>,
+            {
+                let mut element = ListedElement::Other;
+                while let Some(kind) = map.next_key::<String>()? {
+                    if kind == "prefix" {
+                        element = ListedElement::Prefix(map.next_value::<ListedPrefix<'a>>()?);
+                    } else {
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                    }
+                }
+                Ok(element)
+            }
+
+            fn visit_seq<S>(self, mut sequence: S) -> std::result::Result<Self::Value, S::Error>
+            where
+                S: serde::de::SeqAccess<'de>,
+            {
+                while sequence.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(ListedElement::Other)
+            }
+
+            fn visit_bool<E>(self, _: bool) -> std::result::Result<Self::Value, E> {
+                Ok(ListedElement::Other)
+            }
+
+            fn visit_i64<E>(self, _: i64) -> std::result::Result<Self::Value, E> {
+                Ok(ListedElement::Other)
+            }
+
+            fn visit_u64<E>(self, _: u64) -> std::result::Result<Self::Value, E> {
+                Ok(ListedElement::Other)
+            }
+
+            fn visit_f64<E>(self, _: f64) -> std::result::Result<Self::Value, E> {
+                Ok(ListedElement::Other)
+            }
+
+            fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
+                Ok(ListedElement::Other)
+            }
+        }
+
+        deserializer.deserialize_any(ElementVisitor(std::marker::PhantomData))
+    }
 }
 
 #[derive(Deserialize)]
@@ -251,12 +332,14 @@ fn rule_object(protocol: &str, set: &str, statements: Vec<Statement<'static>>) -
 
 fn run_document(commands: Vec<NfObject<'static>>) -> Result<()> {
     let document = Nftables { objects: commands.into() };
-    let json = serde_json::to_vec(&document)?;
     let mut child = Command::new("nft").args(["-j", "-f", "-"])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().context("Failed to start nft; install nftables and grant the service CAP_NET_ADMIN")?;
-    child.stdin.take().context("Failed to open nft stdin")?.write_all(&json)?;
+    let mut stdin = child.stdin.take().context("Failed to open nft stdin")?;
+    let write_result = serde_json::to_writer(&mut stdin, &document);
+    drop(stdin);
     let output = child.wait_with_output()?;
+    write_result.context("Failed to stream nftables update")?;
     if !output.status.success() {
         return Err(anyhow!("nft rejected FireHOL update: {}", String::from_utf8_lossy(&output.stderr).trim()));
     }
@@ -357,9 +440,9 @@ fn read_set_elements(name: &str) -> Result<HashSet<String>> {
         SetListingEntry::Other => None,
     }).flatten() {
         let value = match element {
-            ListedElement::Prefix { prefix } => format!("{}/{}", prefix.addr, prefix.len),
+            ListedElement::Prefix(prefix) => format!("{}/{}", prefix.addr, prefix.len),
             ListedElement::Address(address) => address.into_owned(),
-            ListedElement::Other(_) => continue,
+            ListedElement::Other => continue,
         };
         let network = parse_network(&value)
             .with_context(|| format!("Invalid network in nftables set {name}: {value}"))?;
