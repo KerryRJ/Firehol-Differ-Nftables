@@ -10,32 +10,8 @@ use serde::Deserialize;
 use std::{borrow::Cow, collections::HashSet, io::Write, net::IpAddr, process::{Command, Stdio}};
 
 #[derive(Deserialize)]
-struct TableListing<'a> {
-    #[serde(borrow)]
-    nftables: Vec<ListingEntry<'a>>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase", bound(deserialize = "'de: 'a"))]
-enum ListingEntry<'a> {
-    Metainfo(serde::de::IgnoredAny),
-    Table(serde::de::IgnoredAny),
-    Set(ListedSet<'a>),
-    Chain(ListedChain<'a>),
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Deserialize)]
-struct ListedSet<'a> {
-    #[serde(borrow)]
-    name: Cow<'a, str>,
-}
-
-#[derive(Deserialize)]
-struct ListedChain<'a> {
-    #[serde(borrow)]
-    name: Cow<'a, str>,
+struct TableListing {
+    nftables: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -123,15 +99,20 @@ fn ensure_table_and_sets() -> Result<()> {
     let table_list = Command::new("nft").args(["-j", "list", "table", "inet", TABLE]).output()
         .context("Failed to run nft; install nftables")?;
     let (existing, chains) = if table_list.status.success() {
-        let listed: TableListing<'_> = serde_json::from_slice(&table_list.stdout)
+        let listed: TableListing = serde_json::from_slice(&table_list.stdout)
             .context("Could not parse nft table listing")?;
         let mut existing = HashSet::new();
         let mut chains = HashSet::new();
         for entry in listed.nftables {
-            match entry {
-                ListingEntry::Table(_) | ListingEntry::Metainfo(_) | ListingEntry::Other => {}
-                ListingEntry::Set(set) => { existing.insert(set.name); }
-                ListingEntry::Chain(chain) => { chains.insert(chain.name); }
+            if let Some(set) = entry.get("set") {
+                if let Some(name) = set.get("name").and_then(serde_json::Value::as_str) {
+                    existing.insert(name.to_owned());
+                }
+            }
+            if let Some(chain) = entry.get("chain") {
+                if let Some(name) = chain.get("name").and_then(serde_json::Value::as_str) {
+                    chains.insert(name.to_owned());
+                }
             }
         }
         (existing, chains)
