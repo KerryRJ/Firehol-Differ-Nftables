@@ -29,6 +29,7 @@ jobs:
           strip --strip-debug target/release/firehol-differ-nftables
           objcopy --add-gnu-debuglink=target/release/firehol-differ-nftables.debug target/release/firehol-differ-nftables
           mv target/release/firehol-differ-nftables.debug target/release/firehol-differ-nftables-ubuntu-26.04-amd64.debug
+          objcopy --add-gnu-debuglink=target/release/firehol-differ-nftables-ubuntu-26.04-amd64.debug target/release/firehol-differ-nftables
 
       - name: Rebuild release package without debug information
         run: ./linux/build-deb.sh
