@@ -36,13 +36,18 @@ pub(super) fn replace_lists(
     append_whitelist(&mut commands, whitelist_ipv4, whitelist_ipv6, github_networks)?;
     for ((name, _), networks) in DOWNLOADED_SETS.iter().zip(lists) {
         let current = read_set_elements(name)?;
-        let desired: HashSet<String> = networks.iter().cloned().collect();
-        let additions: Vec<_> = desired.difference(&current).cloned().collect();
-        let deletions: Vec<_> = current.difference(&desired).cloned().collect();
-        let after_count = current.len() + additions.len() - deletions.len();
-        info!("nftables set {name}: before={} additions={} deletions={} after={after_count}", current.len(), additions.len(), deletions.len());
-        commands.extend(named_element_commands(name, &deletions, false)?);
-        commands.extend(named_element_commands(name, &additions, true)?);
+        let desired: HashSet<&str> = networks.iter().map(String::as_str).collect();
+        let current_refs: HashSet<&str> = current.iter().map(String::as_str).collect();
+        let additions = desired.difference(&current_refs).count();
+        let deletions = current_refs.difference(&desired).count();
+        let after_count = current.len() + additions - deletions;
+        info!("nftables set {name}: before={} additions={additions} deletions={deletions} after={after_count}", current.len());
+        for network in current.iter().filter(|network| !desired.contains(network.as_str())) {
+            commands.extend(named_element_commands(name, std::slice::from_ref(network), false)?);
+        }
+        for network in networks.iter().filter(|network| !current_refs.contains(network.as_str())) {
+            commands.extend(named_element_commands(name, std::slice::from_ref(network), true)?);
+        }
     }
     append_prerouting_rules(&mut commands, log_blocked);
     run_document(commands)
@@ -205,13 +210,22 @@ fn append_whitelist_set(commands: &mut Vec<NfObject<'static>>, name: &str, netwo
             .map(|net| net.trunc())
             .with_context(|| format!("Invalid whitelist network: {value}"))
     }).collect::<Result<_>>()?;
-    let desired: HashSet<String> = parsed.iter()
-        .filter(|candidate| candidate.addr().is_ipv4() == ipv4)
-        .filter(|candidate| !parsed.iter().any(|outer| {
-            outer.prefix_len() < candidate.prefix_len() && outer.contains(*candidate)
-        }))
-        .map(ToString::to_string)
+    let mut family_networks: Vec<_> = parsed.iter()
+        .filter(|network| network.addr().is_ipv4() == ipv4)
+        .copied()
         .collect();
+    family_networks.sort_by(|left, right| {
+        left.addr().cmp(&right.addr()).then_with(|| left.prefix_len().cmp(&right.prefix_len()))
+    });
+    let mut desired = Vec::<ipnet::IpNet>::with_capacity(family_networks.len());
+    for candidate in family_networks {
+        if !desired.iter().any(|outer| {
+            outer.prefix_len() < candidate.prefix_len() && outer.contains(candidate)
+        }) {
+            desired.push(candidate);
+        }
+    }
+    let desired: HashSet<String> = desired.into_iter().map(|network| network.to_string()).collect();
     info!("nftables whitelist set {name}: replacing with {} networks", desired.len());
     commands.push(NfObject::CmdObject(NfCmd::Flush(FlushObject::Set(Box::new(Set {
         family: FAMILY,
@@ -227,7 +241,8 @@ fn append_whitelist_set(commands: &mut Vec<NfObject<'static>>, name: &str, netwo
         size: None,
         comment: None,
     })))));
-    commands.extend(named_element_commands(name, &desired.into_iter().collect::<Vec<_>>(), true)?);
+    let desired: Vec<_> = desired.into_iter().collect();
+    commands.extend(named_element_commands(name, &desired, true)?);
     Ok(())
 }
 

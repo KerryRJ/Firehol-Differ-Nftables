@@ -18,12 +18,13 @@ use tokio_util::sync::CancellationToken;
 const GITHUB_META_URL: &str = "https://api.github.com/meta";
 
 pub async fn run_scheduler(data_dir: PathBuf, config: Config, cancellation: CancellationToken) -> Result<()> {
+    let client = reqwest::Client::builder().user_agent("firehol-differ-nftables").build()?;
     let mut ticker = tokio::time::interval(config.interval);
     loop {
         tokio::select! {
             _ = cancellation.cancelled() => return Ok(()),
             _ = ticker.tick() => {
-                if let Err(error) = run_once(&data_dir, &config).await {
+                if let Err(error) = run_once_with_client(&data_dir, &config, &client, false).await {
                     error!("Scheduled download/update failed; will retry: {error:#}");
                 }
             }
@@ -32,15 +33,26 @@ pub async fn run_scheduler(data_dir: PathBuf, config: Config, cancellation: Canc
 }
 
 pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
+    let client = reqwest::Client::builder().user_agent("firehol-differ-nftables").build()?;
+    run_once_with_client(data_dir, config, &client, true).await
+}
+
+async fn run_once_with_client(
+    data_dir: &Path,
+    config: &Config,
+    client: &reqwest::Client,
+    _restore_if_unchanged: bool,
+) -> Result<()> {
     fs::create_dir_all(data_dir).await?;
     let start = Instant::now();
     let mut etags = Etags::load(data_dir).await.unwrap_or_default();
-    let client = reqwest::Client::builder().user_agent("firehol-differ-nftables").build()?;
-    let l1_etag = remote_etag(&client, &config.l1_url).await?;
-    let l2_etag = remote_etag(&client, &config.l2_url).await?;
-    let bogons_ipv4_etag = remote_etag(&client, &config.bogons_ipv4_url).await?;
-    let bogons_ipv6_etag = remote_etag(&client, &config.bogons_ipv6_url).await?;
-    let github_meta_etag = remote_etag(&client, GITHUB_META_URL).await?;
+    let (l1_etag, l2_etag, bogons_ipv4_etag, bogons_ipv6_etag, github_meta_etag) = tokio::try_join!(
+        remote_etag(client, &config.l1_url),
+        remote_etag(client, &config.l2_url),
+        remote_etag(client, &config.bogons_ipv4_url),
+        remote_etag(client, &config.bogons_ipv6_url),
+        remote_etag(client, GITHUB_META_URL),
+    )?;
 
     if l1_etag.is_some()
         && l2_etag.is_some()
@@ -55,45 +67,45 @@ pub async fn run_once(data_dir: &Path, config: &Config) -> Result<()> {
     {
         info!("ETags have not changed.");
         #[cfg(target_os = "linux")]
-        restore_cached(data_dir, config).await?;
+        if _restore_if_unchanged {
+            restore_cached(data_dir, config).await?;
+        }
         return Ok(());
     }
 
     info!("Downloading FireHOL, Team Cymru, and GitHub IP lists ...");
     let (l1_remote, l2_remote, bogons_ipv4_remote, bogons_ipv6_remote) = tokio::try_join!(
-        download(&client, &config.l1_url),
-        download(&client, &config.l2_url),
-        download(&client, &config.bogons_ipv4_url),
-        download(&client, &config.bogons_ipv6_url),
+        download(client, &config.l1_url),
+        download(client, &config.l2_url),
+        download(client, &config.bogons_ipv4_url),
+        download(client, &config.bogons_ipv6_url),
     )?;
     let cached_github_meta = read_or_empty(&data_dir.join("github-meta.json")).await?;
     let github_meta_unchanged = github_meta_etag.is_some()
         && etags.github_meta.as_deref() == github_meta_etag.as_deref();
     let (github_meta, _github_networks) = github_metadata(
-        &client,
+        client,
         &cached_github_meta,
         github_meta_unchanged,
     ).await?;
-    let l1_local = read_or_empty(&data_dir.join("firehol_level1.netset")).await?;
-    let l2_local = read_or_empty(&data_dir.join("firehol_level2.netset")).await?;
-    let bogons_ipv4_local = read_or_empty(&data_dir.join("fullbogons-ipv4.txt")).await?;
-    let bogons_ipv6_local = read_or_empty(&data_dir.join("fullbogons-ipv6.txt")).await?;
-
-    let old_lists = [&l1_local, &l2_local, &bogons_ipv4_local, &bogons_ipv6_local];
-    let new_lists = [&l1_remote, &l2_remote, &bogons_ipv4_remote, &bogons_ipv6_remote];
     #[cfg(target_os = "linux")]
-    let mut new_sets = Vec::new();
+    let mut new_sets = Vec::with_capacity(4);
     let mut total = 0;
-    for (old_list, new_list) in old_lists.into_iter().zip(new_lists) {
-        let mut old = Ipset::new().from(old_list);
+    for (filename, new_list) in [
+        ("firehol_level1.netset", &l1_remote),
+        ("firehol_level2.netset", &l2_remote),
+        ("fullbogons-ipv4.txt", &bogons_ipv4_remote),
+        ("fullbogons-ipv6.txt", &bogons_ipv6_remote),
+    ] {
+        let old_list = read_or_empty(&data_dir.join(filename)).await?;
+        let mut old = Ipset::new().from(&old_list);
+        drop(old_list);
         let mut new = Ipset::new().from(new_list);
         old.consolidate();
         new.consolidate();
-        let mut additions: Vec<_> = new.ips.difference(&old.ips).cloned().collect();
-        let mut deletions: Vec<_> = old.ips.difference(&new.ips).cloned().collect();
-        additions.sort();
-        deletions.sort();
-        total += additions.len() + deletions.len();
+        let additions = new.ips.difference(&old.ips).count();
+        let deletions = old.ips.difference(&new.ips).count();
+        total += additions + deletions;
         #[cfg(target_os = "linux")]
         new_sets.push(new.ips);
     }
