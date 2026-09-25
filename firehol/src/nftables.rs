@@ -18,6 +18,7 @@ struct TableListing<'a> {
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase", bound(deserialize = "'de: 'a"))]
 enum ListingEntry<'a> {
+    Metainfo(serde::de::IgnoredAny),
     Table(serde::de::IgnoredAny),
     Set(ListedSet<'a>),
     Chain(ListedChain<'a>),
@@ -120,23 +121,25 @@ pub(super) fn replace_lists(
 fn ensure_table_and_sets() -> Result<()> {
     let table_list = Command::new("nft").args(["-j", "list", "table", "inet", TABLE]).output()
         .context("Failed to run nft; install nftables")?;
-    if !table_list.status.success() {
+    let (existing, chains) = if table_list.status.success() {
+        let listed: TableListing<'_> = serde_json::from_slice(&table_list.stdout)
+            .context("Could not parse nft table listing")?;
+        let mut existing = HashSet::new();
+        let mut chains = HashSet::new();
+        for entry in listed.nftables {
+            match entry {
+                ListingEntry::Table(_) | ListingEntry::Metainfo(_) | ListingEntry::Other => {}
+                ListingEntry::Set(set) => { existing.insert(set.name); }
+                ListingEntry::Chain(chain) => { chains.insert(chain.name); }
+            }
+        }
+        (existing, chains)
+    } else {
         run_document(vec![NfObject::CmdObject(NfCmd::Add(NfListObject::Table(Table {
             family: FAMILY, name: TABLE.into(), handle: None,
         })))])?;
-    }
-    let listed: TableListing<'_> = serde_json::from_slice(&table_list.stdout)
-        .context("Could not parse nft table listing")?;
-    let mut existing = HashSet::new();
-    let mut chains = HashSet::new();
-    for entry in listed.nftables {
-        match entry {
-            ListingEntry::Table(_) => {}
-            ListingEntry::Set(set) => { existing.insert(set.name); }
-            ListingEntry::Chain(chain) => { chains.insert(chain.name); }
-            ListingEntry::Other => {}
-        }
-    }
+        (HashSet::new(), HashSet::new())
+    };
     let mut missing = Vec::new();
     for (name, set_type) in DOWNLOADED_SETS {
         if !existing.contains(name) { missing.push(set_command(name, set_type)); }
