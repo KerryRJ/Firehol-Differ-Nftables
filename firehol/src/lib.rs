@@ -144,16 +144,17 @@ async fn run_once_with_client(
 /// This is used after a reboot or an nftables ruleset reload.
 #[cfg(target_os = "linux")]
 pub async fn restore_cached(data_dir: &Path, config: &Config) -> Result<()> {
-    let l1 = read_or_empty(&data_dir.join("firehol_level1.netset")).await?;
-    let l2 = read_or_empty(&data_dir.join("firehol_level2.netset")).await?;
-    let bogons_ipv4 = read_or_empty(&data_dir.join("fullbogons-ipv4.txt")).await?;
-    let bogons_ipv6 = read_or_empty(&data_dir.join("fullbogons-ipv6.txt")).await?;
-    let cached_github_meta = read_or_empty(&data_dir.join("github-meta.json")).await?;
     let client = reqwest::Client::builder().user_agent("firehol-differ-nftables").build()?;
+    let (l1, missing_l1) = read_cached_or_missing(data_dir, "firehol_level1.netset").await?;
+    let (l2, missing_l2) = read_cached_or_missing(data_dir, "firehol_level2.netset").await?;
+    let (bogons_ipv4, missing_bogons_ipv4) = read_cached_or_missing(data_dir, "fullbogons-ipv4.txt").await?;
+    let (bogons_ipv6, missing_bogons_ipv6) = read_cached_or_missing(data_dir, "fullbogons-ipv6.txt").await?;
+    let l1 = if missing_l1 { download(&client, &config.l1_url).await? } else { l1 };
+    let l2 = if missing_l2 { download(&client, &config.l2_url).await? } else { l2 };
+    let bogons_ipv4 = if missing_bogons_ipv4 { download(&client, &config.bogons_ipv4_url).await? } else { bogons_ipv4 };
+    let bogons_ipv6 = if missing_bogons_ipv6 { download(&client, &config.bogons_ipv6_url).await? } else { bogons_ipv6 };
+    let cached_github_meta = read_or_empty(&data_dir.join("github-meta.json")).await?;
     let (github_meta, github_networks) = github_metadata(&client, &cached_github_meta, true).await?;
-    if github_meta != cached_github_meta {
-        fs::write(data_dir.join("github-meta.json"), &github_meta).await?;
-    }
 
     let lists = [&l1, &l2, &bogons_ipv4, &bogons_ipv6];
     let mut networks = Vec::new();
@@ -165,7 +166,25 @@ pub async fn restore_cached(data_dir: &Path, config: &Config) -> Result<()> {
         networks.push(entries);
     }
     let (whitelist_ipv4, whitelist_ipv6) = load_whitelist(data_dir).await?;
-    nftables_sync::replace_lists(&networks, &whitelist_ipv4, &whitelist_ipv6, &github_networks, config.log_blocked)
+    nftables_sync::replace_lists(&networks, &whitelist_ipv4, &whitelist_ipv6, &github_networks, config.log_blocked)?;
+    tokio::try_join!(
+        fs::write(data_dir.join("firehol_level1.netset"), &l1),
+        fs::write(data_dir.join("firehol_level2.netset"), &l2),
+        fs::write(data_dir.join("fullbogons-ipv4.txt"), &bogons_ipv4),
+        fs::write(data_dir.join("fullbogons-ipv6.txt"), &bogons_ipv6),
+        fs::write(data_dir.join("github-meta.json"), &github_meta),
+    )?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+async fn read_cached_or_missing(data_dir: &Path, filename: &str) -> Result<(String, bool)> {
+    let path = data_dir.join(filename);
+    match fs::read_to_string(&path).await {
+        Ok(value) => Ok((value, false)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((String::new(), true)),
+        Err(error) => Err(error).with_context(|| format!("Failed to read cached feed {}", path.display())),
+    }
 }
 
 #[cfg(target_os = "linux")]
