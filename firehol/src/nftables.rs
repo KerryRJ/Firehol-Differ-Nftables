@@ -207,24 +207,19 @@ pub(super) fn replace_lists(
     append_whitelist(&mut commands, whitelist_ipv4, whitelist_ipv6, github_networks)?;
     for ((name, _), networks) in DOWNLOADED_SETS.iter().zip(lists) {
         let current = read_set_elements(name)?;
-        let desired: HashSet<&str> = networks.iter().map(String::as_str).collect();
-        let current_refs: HashSet<&str> = current.iter().map(String::as_str).collect();
-        let additions = desired.difference(&current_refs).count();
-        let deletions = current_refs.difference(&desired).count();
+        let desired: HashSet<ipnet::IpNet> = networks.iter()
+            .map(|network| parse_network(network).map(|network| network.trunc()))
+            .collect::<Result<_>>()?;
+        let additions = desired.difference(&current).count();
+        let deletions = current.difference(&desired).count();
         let after_count = current.len() + additions - deletions;
         info!("nftables set {name}: before={} additions={additions} deletions={deletions} after={after_count}", current.len());
-        let deletions: Vec<&str> = current.iter()
-            .filter(|network| !desired.contains(network.as_str()))
-            .map(String::as_str)
-            .collect();
-        let additions: Vec<&str> = networks.iter()
-            .filter(|network| !current_refs.contains(network.as_str()))
-            .map(String::as_str)
-            .collect();
-        if let Some(command) = named_element_command(name, &deletions, false)? {
+        let deletions: Vec<ipnet::IpNet> = current.difference(&desired).copied().collect();
+        let additions: Vec<ipnet::IpNet> = desired.difference(&current).copied().collect();
+        if let Some(command) = named_element_command(name, &deletions, false) {
             commands.push(command);
         }
-        if let Some(command) = named_element_command(name, &additions, true)? {
+        if let Some(command) = named_element_command(name, &additions, true) {
             commands.push(command);
         }
     }
@@ -412,7 +407,7 @@ fn append_whitelist_set(commands: &mut Vec<NfObject<'static>>, name: &str, netwo
             desired.push(candidate);
         }
     }
-    let desired: HashSet<String> = desired.into_iter().map(|network| network.to_string()).collect();
+    let desired: HashSet<ipnet::IpNet> = desired.into_iter().collect();
     info!("nftables whitelist set {name}: replacing with {} networks", desired.len());
     commands.push(NfObject::CmdObject(NfCmd::Flush(FlushObject::Set(Box::new(Set {
         family: FAMILY,
@@ -429,14 +424,13 @@ fn append_whitelist_set(commands: &mut Vec<NfObject<'static>>, name: &str, netwo
         comment: None,
     })))));
     let desired: Vec<_> = desired.into_iter().collect();
-    let desired_refs: Vec<_> = desired.iter().map(String::as_str).collect();
-    if let Some(command) = named_element_command(name, &desired_refs, true)? {
+    if let Some(command) = named_element_command(name, &desired, true) {
         commands.push(command);
     }
     Ok(())
 }
 
-fn read_set_elements(name: &str) -> Result<HashSet<String>> {
+fn read_set_elements(name: &str) -> Result<HashSet<ipnet::IpNet>> {
     let output = Command::new("nft").args(["-j", "list", "set", "inet", TABLE, name]).output()
         .with_context(|| format!("Failed to list nftables set {name}"))?;
     if !output.status.success() {
@@ -450,25 +444,24 @@ fn read_set_elements(name: &str) -> Result<HashSet<String>> {
         SetListingEntry::Metainfo(_) => None,
         SetListingEntry::Other => None,
     }).flatten() {
-        let value = match element {
-            ListedElement::Prefix(prefix) => format!("{}/{}", prefix.addr, prefix.len),
-            ListedElement::Address(address) => address.into_owned(),
+        let network = match element {
+            ListedElement::Prefix(prefix) => parse_prefix(&prefix.addr, prefix.len)
+                .with_context(|| format!("Invalid network in nftables set {name}: {}/{}", prefix.addr, prefix.len))?,
+            ListedElement::Address(address) => parse_network(&address)
+                .with_context(|| format!("Invalid network in nftables set {name}: {address}"))?,
             ListedElement::Other => continue,
         };
-        let network = parse_network(&value)
-            .with_context(|| format!("Invalid network in nftables set {name}: {value}"))?;
-        networks.insert(network.trunc().to_string());
+        networks.insert(network.trunc());
     }
     Ok(networks)
 }
 
-fn named_element_command(name: &str, networks: &[&str], add: bool) -> Result<Option<NfObject<'static>>> {
+fn named_element_command(name: &str, networks: &[ipnet::IpNet], add: bool) -> Option<NfObject<'static>> {
     if networks.is_empty() {
-        return Ok(None);
+        return None;
     }
     let mut elements = Vec::with_capacity(networks.len());
-    for value in networks {
-        let network = parse_network(value).with_context(|| format!("Invalid network: {value}"))?;
+    for network in networks {
         let (addr, len) = match network {
             ipnet::IpNet::V4(net) => (net.network().to_string(), net.prefix_len()),
             ipnet::IpNet::V6(net) => (net.network().to_string(), net.prefix_len()),
@@ -484,11 +477,18 @@ fn named_element_command(name: &str, networks: &[&str], add: bool) -> Result<Opt
         name: Cow::Owned(name.to_owned()),
         elem: elements.into(),
     };
-    Ok(Some(NfObject::CmdObject(if add {
+    Some(NfObject::CmdObject(if add {
         NfCmd::Add(NfListObject::Element(element))
     } else {
         NfCmd::Delete(NfListObject::Element(element))
-    })))
+    }))
+}
+
+fn parse_prefix(address: &str, prefix_len: u8) -> Result<ipnet::IpNet> {
+    match address.parse::<IpAddr>()? {
+        IpAddr::V4(address) => Ok(ipnet::IpNet::V4(ipnet::Ipv4Net::new(address, prefix_len)?)),
+        IpAddr::V6(address) => Ok(ipnet::IpNet::V6(ipnet::Ipv6Net::new(address, prefix_len)?)),
+    }
 }
 
 fn parse_network(value: &str) -> Result<ipnet::IpNet> {
