@@ -195,7 +195,7 @@ const GITHUB_WHITELIST_IPV4_SET: &str = "GithubWhitelistIPv4";
 const GITHUB_WHITELIST_IPV6_SET: &str = "GithubWhitelistIPv6";
 
 pub(super) fn replace_lists(
-    lists: &[Vec<String>],
+    lists: &[Vec<ipnet::IpNet>],
     whitelist_ipv4: &[String],
     whitelist_ipv6: &[String],
     github_networks: &[String],
@@ -208,8 +208,8 @@ pub(super) fn replace_lists(
     for ((name, _), networks) in DOWNLOADED_SETS.iter().zip(lists) {
         let current = read_set_elements(name)?;
         let desired: HashSet<ipnet::IpNet> = networks.iter()
-            .map(|network| parse_network(network).map(|network| network.trunc()))
-            .collect::<Result<_>>()?;
+            .map(|network| network.trunc())
+            .collect();
         let additions = desired.difference(&current).count();
         let deletions = current.difference(&desired).count();
         let after_count = current.len() + additions - deletions;

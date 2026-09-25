@@ -109,7 +109,7 @@ async fn run_once_with_client(
     }
 
     #[cfg(target_os = "linux")]
-    let new_sets: Vec<Vec<String>> = new_sets.into_iter().map(|set| {
+    let new_sets: Vec<Vec<ipnet::IpNet>> = new_sets.into_iter().map(|set| {
         let mut entries: Vec<_> = set.into_iter().collect();
         entries.sort();
         entries
@@ -215,8 +215,8 @@ async fn load_whitelist(data_dir: &Path) -> Result<(Vec<String>, Vec<String>)> {
     ipv4.consolidate();
     let mut ipv6 = Ipset::new().from(&ipv6_text);
     ipv6.consolidate();
-    let mut ipv4_networks: Vec<_> = ipv4.ips.into_iter().collect();
-    let mut ipv6_networks: Vec<_> = ipv6.ips.into_iter().collect();
+    let mut ipv4_networks: Vec<_> = ipv4.ips.into_iter().map(|network| network.to_string()).collect();
+    let mut ipv6_networks: Vec<_> = ipv6.ips.into_iter().map(|network| network.to_string()).collect();
     ipv4_networks.sort();
     ipv6_networks.sort();
     Ok((ipv4_networks, ipv6_networks))

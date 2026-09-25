@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 
 pub(crate) struct Ipset {
-    pub(crate) ips: HashSet<String>,
+    pub(crate) ips: HashSet<IpNet>,
     networks: Vec<IpNet>,
 }
 
@@ -24,11 +24,7 @@ impl Ipset {
             return;
         }
         self.ips.clear();
-        self.ips.extend(
-            IpNet::aggregate(&self.networks)
-                .into_iter()
-                .map(|network| network.to_string()),
-        );
+        self.ips.extend(IpNet::aggregate(&self.networks));
         self.networks.clear();
     }
 
@@ -59,6 +55,7 @@ fn parse_networks(lines: &str) -> Vec<IpNet> {
 
 #[cfg(test)]
 mod tests {
+    use ipnet::IpNet;
     use super::Ipset;
 
     #[test]
@@ -67,8 +64,7 @@ mod tests {
 
         ipset.consolidate();
 
-        assert!(ipset.ips.contains("192.0.2.0/30"));
-        assert!(!ipset.ips.contains("label"));
+        assert!(ipset.ips.contains(&"192.0.2.0/30".parse::<IpNet>().unwrap()));
         assert_eq!(ipset.ips.len(), 1);
     }
 }
