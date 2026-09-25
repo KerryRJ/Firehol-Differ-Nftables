@@ -54,18 +54,28 @@ async fn run_once_with_client(
         remote_etag(client, GITHUB_META_URL),
     )?;
 
-    if l1_etag.is_some()
-        && l2_etag.is_some()
-        && bogons_ipv4_etag.is_some()
-        && bogons_ipv6_etag.is_some()
-        && github_meta_etag.is_some()
-        && etags.l1.as_deref() == l1_etag.as_deref()
-        && etags.l2.as_deref() == l2_etag.as_deref()
-        && etags.bogons_ipv4.as_deref() == bogons_ipv4_etag.as_deref()
-        && etags.bogons_ipv6.as_deref() == bogons_ipv6_etag.as_deref()
-        && etags.github_meta.as_deref() == github_meta_etag.as_deref()
+    let (has_l1, has_l2, has_bogons_ipv4, has_bogons_ipv6, has_github_meta) = tokio::try_join!(
+        cache_file_exists(data_dir, "firehol_level1.netset"),
+        cache_file_exists(data_dir, "firehol_level2.netset"),
+        cache_file_exists(data_dir, "fullbogons-ipv4.txt"),
+        cache_file_exists(data_dir, "fullbogons-ipv6.txt"),
+        cache_file_exists(data_dir, "github-meta.json"),
+    )?;
+    let (l1_remote, l2_remote, bogons_ipv4_remote, bogons_ipv6_remote, github_meta_remote) = tokio::try_join!(
+        download_if_changed(client, "FireHOL Level 1", &config.l1_url, has_l1, l1_etag.as_deref(), etags.l1.as_deref()),
+        download_if_changed(client, "FireHOL Level 2", &config.l2_url, has_l2, l2_etag.as_deref(), etags.l2.as_deref()),
+        download_if_changed(client, "Team Cymru IPv4 bogons", &config.bogons_ipv4_url, has_bogons_ipv4, bogons_ipv4_etag.as_deref(), etags.bogons_ipv4.as_deref()),
+        download_if_changed(client, "Team Cymru IPv6 bogons", &config.bogons_ipv6_url, has_bogons_ipv6, bogons_ipv6_etag.as_deref(), etags.bogons_ipv6.as_deref()),
+        download_if_changed(client, "GitHub IP metadata", GITHUB_META_URL, has_github_meta, github_meta_etag.as_deref(), etags.github_meta.as_deref()),
+    )?;
+
+    if l1_remote.is_none()
+        && l2_remote.is_none()
+        && bogons_ipv4_remote.is_none()
+        && bogons_ipv6_remote.is_none()
+        && github_meta_remote.is_none()
     {
-        info!("ETags have not changed.");
+        info!("ETags have not changed and all feed files are cached.");
         #[cfg(target_os = "linux")]
         if _restore_if_unchanged {
             restore_cached(data_dir, config).await?;
@@ -73,61 +83,46 @@ async fn run_once_with_client(
         return Ok(());
     }
 
-    info!("Downloading FireHOL, Team Cymru, and GitHub IP lists ...");
-    let previous_lists = [
-        read_or_empty(&data_dir.join("firehol_level1.netset")).await?,
-        read_or_empty(&data_dir.join("firehol_level2.netset")).await?,
-        read_or_empty(&data_dir.join("fullbogons-ipv4.txt")).await?,
-        read_or_empty(&data_dir.join("fullbogons-ipv6.txt")).await?,
-    ];
-    let l1_remote = download(client, &config.l1_url).await?;
-    let l2_remote = download(client, &config.l2_url).await?;
-    let bogons_ipv4_remote = download(client, &config.bogons_ipv4_url).await?;
-    let bogons_ipv6_remote = download(client, &config.bogons_ipv6_url).await?;
-    let cached_github_meta = read_or_empty(&data_dir.join("github-meta.json")).await?;
-    let github_meta_unchanged = github_meta_etag.is_some()
-        && etags.github_meta.as_deref() == github_meta_etag.as_deref();
-    let github_meta = github_metadata(client, &cached_github_meta, github_meta_unchanged).await?;
+    let github_networks = match github_meta_remote.as_deref() {
+        Some(meta) => Some(parse_github_ranges(meta)?),
+        None => None,
+    };
     #[cfg(target_os = "linux")]
-    let mut new_sets = Vec::with_capacity(4);
-    let mut total = 0;
-    for (old_list, new_list) in previous_lists.iter().zip([
-        &l1_remote,
-        &l2_remote,
-        &bogons_ipv4_remote,
-        &bogons_ipv6_remote,
-    ]) {
-        let mut old = Ipset::new().from(&old_list);
-        let mut new = Ipset::new().from(new_list);
-        old.consolidate();
-        new.consolidate();
-        let additions = new.ips.difference(&old.ips).count();
-        let deletions = old.ips.difference(&new.ips).count();
-        total += additions + deletions;
-        #[cfg(target_os = "linux")]
-        new_sets.push(new.ips);
+    let updated_lists = [&l1_remote, &l2_remote, &bogons_ipv4_remote, &bogons_ipv6_remote];
+    #[cfg(target_os = "linux")]
+    let mut new_sets = Vec::with_capacity(updated_lists.len());
+    #[cfg(target_os = "linux")]
+    for list in updated_lists {
+        let networks = list.as_deref().map(|text| {
+            let mut set = Ipset::new().from(text);
+            set.consolidate();
+            let mut networks: Vec<_> = set.ips.into_iter().collect();
+            networks.sort();
+            networks
+        });
+        new_sets.push(networks);
     }
 
     #[cfg(target_os = "linux")]
-    let new_sets: Vec<Vec<ipnet::IpNet>> = new_sets.into_iter().map(|set| {
-        let mut entries: Vec<_> = set.into_iter().collect();
-        entries.sort();
-        entries
-    }).collect();
-    #[cfg(target_os = "linux")]
     let nftables_result = async {
-        let _github_networks = parse_github_ranges(&github_meta)?;
-        let (whitelist_ipv4, whitelist_ipv6) = load_whitelist(data_dir).await?;
-        nftables_sync::replace_lists(&new_sets, &whitelist_ipv4, &whitelist_ipv6, &_github_networks, config.log_blocked)
+        let (whitelist_ipv4, whitelist_ipv6) = if github_networks.is_some() {
+            let (ipv4, ipv6) = load_whitelist(data_dir).await?;
+            (Some(ipv4), Some(ipv6))
+        } else {
+            (None, None)
+        };
+        nftables_sync::replace_lists(
+            &new_sets,
+            whitelist_ipv4.as_deref(),
+            whitelist_ipv6.as_deref(),
+            github_networks.as_deref(),
+            config.log_blocked,
+        )
     }.await;
-    #[cfg(target_os = "linux")]
-    let persist_result = persist_downloads(data_dir, &l1_remote, &l2_remote, &bogons_ipv4_remote, &bogons_ipv6_remote, &github_meta).await;
-    persist_result?;
     #[cfg(target_os = "linux")]
     nftables_result?;
 
-    info!("Remote IPs: L1={} L2={} Bogons4={} Bogons6={} T={}", rows(&l1_remote), rows(&l2_remote), rows(&bogons_ipv4_remote), rows(&bogons_ipv6_remote), rows(&l1_remote) + rows(&l2_remote) + rows(&bogons_ipv4_remote) + rows(&bogons_ipv6_remote));
-    info!("Total changes: {total}");
+    persist_changed_downloads(data_dir, &l1_remote, &l2_remote, &bogons_ipv4_remote, &bogons_ipv6_remote, &github_meta_remote).await?;
     etags.l1 = l1_etag;
     etags.l2 = l2_etag;
     etags.bogons_ipv4 = bogons_ipv4_etag;
@@ -166,7 +161,14 @@ pub async fn restore_cached(data_dir: &Path, config: &Config) -> Result<()> {
             networks.push(entries);
         }
         let (whitelist_ipv4, whitelist_ipv6) = load_whitelist(data_dir).await?;
-        nftables_sync::replace_lists(&networks, &whitelist_ipv4, &whitelist_ipv6, &github_networks, config.log_blocked)
+        let updates: Vec<_> = networks.into_iter().map(Some).collect();
+        nftables_sync::replace_lists(
+            &updates,
+            Some(&whitelist_ipv4),
+            Some(&whitelist_ipv6),
+            Some(&github_networks),
+            config.log_blocked,
+        )
     }.await;
     let persist_result = persist_downloads(data_dir, &l1, &l2, &bogons_ipv4, &bogons_ipv6, &github_meta).await;
     processing_result?;
@@ -189,6 +191,29 @@ async fn persist_downloads(
         fs::write(data_dir.join("fullbogons-ipv6.txt"), bogons_ipv6),
         fs::write(data_dir.join("github-meta.json"), github_meta),
     )?;
+    Ok(())
+}
+
+async fn persist_changed_downloads(
+    data_dir: &Path,
+    l1: &Option<String>,
+    l2: &Option<String>,
+    bogons_ipv4: &Option<String>,
+    bogons_ipv6: &Option<String>,
+    github_meta: &Option<String>,
+) -> Result<()> {
+    for (filename, contents) in [
+        ("firehol_level1.netset", l1),
+        ("firehol_level2.netset", l2),
+        ("fullbogons-ipv4.txt", bogons_ipv4),
+        ("fullbogons-ipv6.txt", bogons_ipv6),
+        ("github-meta.json", github_meta),
+    ] {
+        if let Some(contents) = contents {
+            fs::write(data_dir.join(filename), contents).await
+                .with_context(|| format!("Failed to persist updated feed {filename}"))?;
+        }
+    }
     Ok(())
 }
 
@@ -274,4 +299,31 @@ async fn read_or_empty(path: &Path) -> Result<String> {
     Ok(match fs::read_to_string(path).await { Ok(value) => value, Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(), Err(error) => return Err(error.into()) })
 }
 
-fn rows(value: &str) -> usize { value.lines().filter(|line| { let line = line.trim(); !line.is_empty() && !line.starts_with('#') }).count() }
+async fn cache_file_exists(data_dir: &Path, filename: &str) -> Result<bool> {
+    let path = data_dir.join(filename);
+    match fs::metadata(&path).await {
+        Ok(metadata) => {
+            ensure!(metadata.is_file(), "Feed cache path is not a file: {}", path.display());
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).with_context(|| format!("Failed to inspect feed cache {}", path.display())),
+    }
+}
+
+async fn download_if_changed(
+    client: &reqwest::Client,
+    name: &str,
+    url: &str,
+    cached_file_exists: bool,
+    remote_etag: Option<&str>,
+    cached_etag: Option<&str>,
+) -> Result<Option<String>> {
+    let etag_changed = remote_etag.is_none() || remote_etag != cached_etag;
+    if !cached_file_exists || etag_changed {
+        info!("Downloading updated feed: {name}");
+        Ok(Some(download(client, url).await?))
+    } else {
+        Ok(None)
+    }
+}
