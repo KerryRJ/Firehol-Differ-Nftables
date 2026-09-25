@@ -1,8 +1,7 @@
 [workspace]
 members = [
     "firehol",
-    "linux",
-    "windows"
+    "linux"
 ]
 resolver = "3"
 

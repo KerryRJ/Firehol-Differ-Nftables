@@ -1,19 +1,11 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use firehol::{load_config, run_once, run_scheduler};
-use std::{fs, path::PathBuf};
+use std::{fs, path::{Path, PathBuf}};
 use tokio_util::sync::CancellationToken;
 
-fn init_logging(data_dir: &std::path::Path) -> Result<()> {
-    let log_dir = if cfg!(windows) {
-        std::env::var_os("PROGRAMDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| data_dir.to_path_buf())
-            .join("firehol")
-            .join("logs")
-    } else {
-        PathBuf::from("/var/log/firehol")
-    };
+fn init_logging() -> Result<()> {
+    let log_dir = Path::new("/var/log/firehol-differ-nftables");
     fs::create_dir_all(&log_dir)?;
     let file = fs::OpenOptions::new()
         .create(true)
@@ -46,7 +38,7 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    init_logging(&cli.data_dir)?;
+    init_logging()?;
 
     match cli.command.unwrap_or(Command::RunOnce) {
         Command::RunOnce => {
