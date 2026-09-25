@@ -47,6 +47,7 @@ struct SetListing<'a> {
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase", bound(deserialize = "'de: 'a"))]
 enum SetListingEntry<'a> {
+    Metainfo(serde::de::IgnoredAny),
     Set(ListedElements<'a>),
     #[serde(other)]
     Other,
@@ -328,6 +329,7 @@ fn read_set_elements(name: &str) -> Result<HashSet<String>> {
     let mut networks = HashSet::new();
     for element in listed.nftables.into_iter().filter_map(|entry| match entry {
         SetListingEntry::Set(set) => set.elem,
+        SetListingEntry::Metainfo(_) => None,
         SetListingEntry::Other => None,
     }).flatten() {
         let value = match element {
