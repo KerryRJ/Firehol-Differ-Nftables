@@ -18,6 +18,7 @@ struct TableListing<'a> {
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase", bound(deserialize = "'de: 'a"))]
 enum ListingEntry<'a> {
+    Table(serde::de::IgnoredAny),
     Set(ListedSet<'a>),
     Chain(ListedChain<'a>),
     #[serde(other)]
@@ -130,6 +131,7 @@ fn ensure_table_and_sets() -> Result<()> {
     let mut chains = HashSet::new();
     for entry in listed.nftables {
         match entry {
+            ListingEntry::Table(_) => {}
             ListingEntry::Set(set) => { existing.insert(set.name); }
             ListingEntry::Chain(chain) => { chains.insert(chain.name); }
             ListingEntry::Other => {}
