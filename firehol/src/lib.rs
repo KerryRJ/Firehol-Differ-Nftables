@@ -74,33 +74,30 @@ async fn run_once_with_client(
     }
 
     info!("Downloading FireHOL, Team Cymru, and GitHub IP lists ...");
-    let (l1_remote, l2_remote, bogons_ipv4_remote, bogons_ipv6_remote) = tokio::try_join!(
-        download(client, &config.l1_url),
-        download(client, &config.l2_url),
-        download(client, &config.bogons_ipv4_url),
-        download(client, &config.bogons_ipv6_url),
-    )?;
+    let previous_lists = [
+        read_or_empty(&data_dir.join("firehol_level1.netset")).await?,
+        read_or_empty(&data_dir.join("firehol_level2.netset")).await?,
+        read_or_empty(&data_dir.join("fullbogons-ipv4.txt")).await?,
+        read_or_empty(&data_dir.join("fullbogons-ipv6.txt")).await?,
+    ];
+    let l1_remote = download(client, &config.l1_url).await?;
+    let l2_remote = download(client, &config.l2_url).await?;
+    let bogons_ipv4_remote = download(client, &config.bogons_ipv4_url).await?;
+    let bogons_ipv6_remote = download(client, &config.bogons_ipv6_url).await?;
     let cached_github_meta = read_or_empty(&data_dir.join("github-meta.json")).await?;
     let github_meta_unchanged = github_meta_etag.is_some()
         && etags.github_meta.as_deref() == github_meta_etag.as_deref();
-    let (github_meta, _github_networks) = github_metadata(
-        client,
-        &cached_github_meta,
-        github_meta_unchanged,
-    ).await?;
-    persist_downloads(data_dir, &l1_remote, &l2_remote, &bogons_ipv4_remote, &bogons_ipv6_remote, &github_meta).await?;
+    let github_meta = github_metadata(client, &cached_github_meta, github_meta_unchanged).await?;
     #[cfg(target_os = "linux")]
     let mut new_sets = Vec::with_capacity(4);
     let mut total = 0;
-    for (filename, new_list) in [
-        ("firehol_level1.netset", &l1_remote),
-        ("firehol_level2.netset", &l2_remote),
-        ("fullbogons-ipv4.txt", &bogons_ipv4_remote),
-        ("fullbogons-ipv6.txt", &bogons_ipv6_remote),
-    ] {
-        let old_list = read_or_empty(&data_dir.join(filename)).await?;
+    for (old_list, new_list) in previous_lists.iter().zip([
+        &l1_remote,
+        &l2_remote,
+        &bogons_ipv4_remote,
+        &bogons_ipv6_remote,
+    ]) {
         let mut old = Ipset::new().from(&old_list);
-        drop(old_list);
         let mut new = Ipset::new().from(new_list);
         old.consolidate();
         new.consolidate();
@@ -118,9 +115,16 @@ async fn run_once_with_client(
         entries
     }).collect();
     #[cfg(target_os = "linux")]
-    let (whitelist_ipv4, whitelist_ipv6) = load_whitelist(data_dir).await?;
+    let nftables_result = async {
+        let _github_networks = parse_github_ranges(&github_meta)?;
+        let (whitelist_ipv4, whitelist_ipv6) = load_whitelist(data_dir).await?;
+        nftables_sync::replace_lists(&new_sets, &whitelist_ipv4, &whitelist_ipv6, &_github_networks, config.log_blocked)
+    }.await;
     #[cfg(target_os = "linux")]
-    nftables_sync::replace_lists(&new_sets, &whitelist_ipv4, &whitelist_ipv6, &_github_networks, config.log_blocked)?;
+    let persist_result = persist_downloads(data_dir, &l1_remote, &l2_remote, &bogons_ipv4_remote, &bogons_ipv6_remote, &github_meta).await;
+    persist_result?;
+    #[cfg(target_os = "linux")]
+    nftables_result?;
 
     info!("Remote IPs: L1={} L2={} Bogons4={} Bogons6={} T={}", rows(&l1_remote), rows(&l2_remote), rows(&bogons_ipv4_remote), rows(&bogons_ipv6_remote), rows(&l1_remote) + rows(&l2_remote) + rows(&bogons_ipv4_remote) + rows(&bogons_ipv6_remote));
     info!("Total changes: {total}");
@@ -148,20 +152,25 @@ pub async fn restore_cached(data_dir: &Path, config: &Config) -> Result<()> {
     let bogons_ipv4 = if missing_bogons_ipv4 { download(&client, &config.bogons_ipv4_url).await? } else { bogons_ipv4 };
     let bogons_ipv6 = if missing_bogons_ipv6 { download(&client, &config.bogons_ipv6_url).await? } else { bogons_ipv6 };
     let cached_github_meta = read_or_empty(&data_dir.join("github-meta.json")).await?;
-    let (github_meta, github_networks) = github_metadata(&client, &cached_github_meta, true).await?;
-    persist_downloads(data_dir, &l1, &l2, &bogons_ipv4, &bogons_ipv6, &github_meta).await?;
+    let github_meta = github_metadata(&client, &cached_github_meta, true).await?;
 
-    let lists = [&l1, &l2, &bogons_ipv4, &bogons_ipv6];
-    let mut networks = Vec::new();
-    for list in lists {
-        let mut set = Ipset::new().from(list);
-        set.consolidate();
-        let mut entries: Vec<_> = set.ips.into_iter().collect();
-        entries.sort();
-        networks.push(entries);
-    }
-    let (whitelist_ipv4, whitelist_ipv6) = load_whitelist(data_dir).await?;
-    nftables_sync::replace_lists(&networks, &whitelist_ipv4, &whitelist_ipv6, &github_networks, config.log_blocked)?;
+    let processing_result = async {
+        let github_networks = parse_github_ranges(&github_meta)?;
+        let lists = [&l1, &l2, &bogons_ipv4, &bogons_ipv6];
+        let mut networks = Vec::new();
+        for list in lists {
+            let mut set = Ipset::new().from(list);
+            set.consolidate();
+            let mut entries: Vec<_> = set.ips.into_iter().collect();
+            entries.sort();
+            networks.push(entries);
+        }
+        let (whitelist_ipv4, whitelist_ipv6) = load_whitelist(data_dir).await?;
+        nftables_sync::replace_lists(&networks, &whitelist_ipv4, &whitelist_ipv6, &github_networks, config.log_blocked)
+    }.await;
+    let persist_result = persist_downloads(data_dir, &l1, &l2, &bogons_ipv4, &bogons_ipv6, &github_meta).await;
+    processing_result?;
+    persist_result?;
     Ok(())
 }
 
@@ -213,16 +222,14 @@ async fn load_whitelist(data_dir: &Path) -> Result<(Vec<String>, Vec<String>)> {
     Ok((ipv4_networks, ipv6_networks))
 }
 
-async fn github_metadata(client: &reqwest::Client, cached: &str, use_cache: bool) -> Result<(String, Vec<String>)> {
+async fn github_metadata(client: &reqwest::Client, cached: &str, use_cache: bool) -> Result<String> {
     if use_cache && !cached.is_empty() {
-        if let Ok(networks) = parse_github_ranges(cached) {
-            return Ok((cached.to_owned(), networks));
+        if parse_github_ranges(cached).is_ok() {
+            return Ok(cached.to_owned());
         }
     }
 
-    let body = download(client, GITHUB_META_URL).await?;
-    let networks = parse_github_ranges(&body)?;
-    Ok((body, networks))
+    download(client, GITHUB_META_URL).await
 }
 
 fn parse_github_ranges(body: &str) -> Result<Vec<String>> {
