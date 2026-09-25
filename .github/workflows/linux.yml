@@ -22,16 +22,12 @@ jobs:
       - name: Build Linux service
         run: ./linux/build-deb.sh
 
-      - name: Build and extract debug symbols
+      - name: Build debug release binary
         run: |
-          CARGO_PROFILE_RELEASE_DEBUG=line-tables-only cargo build --release --manifest-path Cargo.toml -p linux
-          objcopy --only-keep-debug target/release/firehol-differ-nftables target/release/firehol-differ-nftables.debug
-          strip --strip-debug target/release/firehol-differ-nftables
-          objcopy --add-gnu-debuglink=target/release/firehol-differ-nftables.debug target/release/firehol-differ-nftables
-          mv target/release/firehol-differ-nftables.debug target/release/firehol-differ-nftables-ubuntu-26.04-amd64.debug
-          objcopy --add-gnu-debuglink=target/release/firehol-differ-nftables-ubuntu-26.04-amd64.debug target/release/firehol-differ-nftables
+          CARGO_PROFILE_RELEASE_DEBUG=full cargo build --release --manifest-path Cargo.toml -p linux
+          cp target/release/firehol-differ-nftables target/release/firehol-differ-nftables-linux-amd64-debug
 
-      - name: Rebuild release package without debug information
+      - name: Build normal release package
         run: ./linux/build-deb.sh
 
       - name: Validate Debian package
@@ -49,11 +45,11 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload debug symbols
+      - name: Upload debug release binary
         uses: actions/upload-artifact@v6
         with:
-          name: firehol-differ-nftables-debug-symbols-ubuntu-26.04-amd64
-          path: target/release/firehol-differ-nftables-ubuntu-26.04-amd64.debug
+          name: firehol-differ-nftables-debug-release-ubuntu-26.04-amd64
+          path: target/release/firehol-differ-nftables-linux-amd64-debug
           if-no-files-found: error
           retention-days: 30
 
@@ -97,10 +93,10 @@ jobs:
           name: firehol-differ-nftables-ubuntu-26.04
           path: dist/ubuntu
 
-      - name: Download debug symbols
+      - name: Download debug release binary
         uses: actions/download-artifact@v8
         with:
-          name: firehol-differ-nftables-debug-symbols-ubuntu-26.04-amd64
+          name: firehol-differ-nftables-debug-release-ubuntu-26.04-amd64
           path: dist/ubuntu
 
       - name: Publish release assets
@@ -109,4 +105,4 @@ jobs:
           tag_name: ${{ steps.release-tag.outputs.tag }}
           files: |
             dist/ubuntu/firehol-differ-nftables-linux-amd64.deb
-            dist/ubuntu/firehol-differ-nftables-ubuntu-26.04-amd64.debug
+            dist/ubuntu/firehol-differ-nftables-linux-amd64-debug
