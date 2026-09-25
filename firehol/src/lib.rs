@@ -88,6 +88,7 @@ async fn run_once_with_client(
         &cached_github_meta,
         github_meta_unchanged,
     ).await?;
+    persist_downloads(data_dir, &l1_remote, &l2_remote, &bogons_ipv4_remote, &bogons_ipv6_remote, &github_meta).await?;
     #[cfg(target_os = "linux")]
     let mut new_sets = Vec::with_capacity(4);
     let mut total = 0;
@@ -121,13 +122,6 @@ async fn run_once_with_client(
     #[cfg(target_os = "linux")]
     nftables_sync::replace_lists(&new_sets, &whitelist_ipv4, &whitelist_ipv6, &_github_networks, config.log_blocked)?;
 
-    tokio::try_join!(
-        fs::write(data_dir.join("firehol_level1.netset"), &l1_remote),
-        fs::write(data_dir.join("firehol_level2.netset"), &l2_remote),
-        fs::write(data_dir.join("fullbogons-ipv4.txt"), &bogons_ipv4_remote),
-        fs::write(data_dir.join("fullbogons-ipv6.txt"), &bogons_ipv6_remote),
-        fs::write(data_dir.join("github-meta.json"), &github_meta)
-    )?;
     info!("Remote IPs: L1={} L2={} Bogons4={} Bogons6={} T={}", rows(&l1_remote), rows(&l2_remote), rows(&bogons_ipv4_remote), rows(&bogons_ipv6_remote), rows(&l1_remote) + rows(&l2_remote) + rows(&bogons_ipv4_remote) + rows(&bogons_ipv6_remote));
     info!("Total changes: {total}");
     etags.l1 = l1_etag;
@@ -155,6 +149,7 @@ pub async fn restore_cached(data_dir: &Path, config: &Config) -> Result<()> {
     let bogons_ipv6 = if missing_bogons_ipv6 { download(&client, &config.bogons_ipv6_url).await? } else { bogons_ipv6 };
     let cached_github_meta = read_or_empty(&data_dir.join("github-meta.json")).await?;
     let (github_meta, github_networks) = github_metadata(&client, &cached_github_meta, true).await?;
+    persist_downloads(data_dir, &l1, &l2, &bogons_ipv4, &bogons_ipv6, &github_meta).await?;
 
     let lists = [&l1, &l2, &bogons_ipv4, &bogons_ipv6];
     let mut networks = Vec::new();
@@ -167,12 +162,23 @@ pub async fn restore_cached(data_dir: &Path, config: &Config) -> Result<()> {
     }
     let (whitelist_ipv4, whitelist_ipv6) = load_whitelist(data_dir).await?;
     nftables_sync::replace_lists(&networks, &whitelist_ipv4, &whitelist_ipv6, &github_networks, config.log_blocked)?;
+    Ok(())
+}
+
+async fn persist_downloads(
+    data_dir: &Path,
+    l1: &str,
+    l2: &str,
+    bogons_ipv4: &str,
+    bogons_ipv6: &str,
+    github_meta: &str,
+) -> Result<()> {
     tokio::try_join!(
-        fs::write(data_dir.join("firehol_level1.netset"), &l1),
-        fs::write(data_dir.join("firehol_level2.netset"), &l2),
-        fs::write(data_dir.join("fullbogons-ipv4.txt"), &bogons_ipv4),
-        fs::write(data_dir.join("fullbogons-ipv6.txt"), &bogons_ipv6),
-        fs::write(data_dir.join("github-meta.json"), &github_meta),
+        fs::write(data_dir.join("firehol_level1.netset"), l1),
+        fs::write(data_dir.join("firehol_level2.netset"), l2),
+        fs::write(data_dir.join("fullbogons-ipv4.txt"), bogons_ipv4),
+        fs::write(data_dir.join("fullbogons-ipv6.txt"), bogons_ipv6),
+        fs::write(data_dir.join("github-meta.json"), github_meta),
     )?;
     Ok(())
 }
