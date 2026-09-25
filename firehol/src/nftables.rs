@@ -11,7 +11,55 @@ use std::{borrow::Cow, collections::HashSet, io::Write, net::IpAddr, process::{C
 
 #[derive(Deserialize)]
 struct TableListing {
-    nftables: Vec<serde_json::Value>,
+    nftables: Vec<TableListingEntry>,
+}
+
+enum TableListingEntry {
+    Set(String),
+    Chain(String),
+    Other,
+}
+
+#[derive(Deserialize)]
+struct ListedNamedObject {
+    name: String,
+}
+
+impl<'de> Deserialize<'de> for TableListingEntry {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct EntryVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for EntryVisitor {
+            type Value = TableListingEntry;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an nftables listing entry")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> std::result::Result<Self::Value, M::Error>
+            where
+                M: serde::de::MapAccess<'de>,
+            {
+                let mut entry = TableListingEntry::Other;
+                while let Some(kind) = map.next_key::<String>()? {
+                    entry = match kind.as_str() {
+                        "set" => TableListingEntry::Set(map.next_value::<ListedNamedObject>()?.name),
+                        "chain" => TableListingEntry::Chain(map.next_value::<ListedNamedObject>()?.name),
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                            TableListingEntry::Other
+                        }
+                    };
+                }
+                Ok(entry)
+            }
+        }
+
+        deserializer.deserialize_map(EntryVisitor)
+    }
 }
 
 #[derive(Deserialize)]
@@ -104,15 +152,10 @@ fn ensure_table_and_sets() -> Result<()> {
         let mut existing = HashSet::new();
         let mut chains = HashSet::new();
         for entry in listed.nftables {
-            if let Some(set) = entry.get("set") {
-                if let Some(name) = set.get("name").and_then(serde_json::Value::as_str) {
-                    existing.insert(name.to_owned());
-                }
-            }
-            if let Some(chain) = entry.get("chain") {
-                if let Some(name) = chain.get("name").and_then(serde_json::Value::as_str) {
-                    chains.insert(name.to_owned());
-                }
+            match entry {
+                TableListingEntry::Set(name) => { existing.insert(name); }
+                TableListingEntry::Chain(name) => { chains.insert(name); }
+                TableListingEntry::Other => {}
             }
         }
         (existing, chains)
