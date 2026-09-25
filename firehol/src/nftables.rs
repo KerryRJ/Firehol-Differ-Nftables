@@ -220,7 +220,7 @@ fn append_whitelist_set(commands: &mut Vec<NfObject<'static>>, name: &str, netwo
     let mut desired = Vec::<ipnet::IpNet>::with_capacity(family_networks.len());
     for candidate in family_networks {
         if !desired.iter().any(|outer| {
-            outer.prefix_len() < candidate.prefix_len() && outer.contains(candidate)
+            outer.prefix_len() < candidate.prefix_len() && outer.contains(&candidate)
         }) {
             desired.push(candidate);
         }
