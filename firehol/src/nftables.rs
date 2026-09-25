@@ -6,7 +6,70 @@ use nftables::{
     stmt::{Drop, Log, Match, Operator, Statement},
     types::{NfChainPolicy, NfChainType, NfFamily, NfHook},
 };
+use serde::Deserialize;
 use std::{borrow::Cow, collections::HashSet, io::Write, net::IpAddr, process::{Command, Stdio}};
+
+#[derive(Deserialize)]
+struct TableListing<'a> {
+    #[serde(borrow)]
+    nftables: Vec<ListingEntry<'a>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ListingEntry<'a> {
+    Set(ListedSet<'a>),
+    Chain(ListedChain<'a>),
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+struct ListedSet<'a> {
+    #[serde(borrow)]
+    name: Cow<'a, str>,
+}
+
+#[derive(Deserialize)]
+struct ListedChain<'a> {
+    #[serde(borrow)]
+    name: Cow<'a, str>,
+}
+
+#[derive(Deserialize)]
+struct SetListing<'a> {
+    #[serde(borrow)]
+    nftables: Vec<SetListingEntry<'a>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SetListingEntry<'a> {
+    Set(ListedElements<'a>),
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+struct ListedElements<'a> {
+    #[serde(borrow)]
+    elem: Option<Vec<ListedElement<'a>>>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ListedElement<'a> {
+    Prefix { prefix: ListedPrefix<'a> },
+    Address(Cow<'a, str>),
+    Other(serde::de::IgnoredAny),
+}
+
+#[derive(Deserialize)]
+struct ListedPrefix<'a> {
+    #[serde(borrow)]
+    addr: Cow<'a, str>,
+    len: u8,
+}
 
 const FAMILY: NfFamily = NfFamily::INet;
 const TABLE: &str = "iodrive";
@@ -61,11 +124,17 @@ fn ensure_table_and_sets() -> Result<()> {
             family: FAMILY, name: TABLE.into(), handle: None,
         })))])?;
     }
-    let sets_list = Command::new("nft").args(["-j", "list", "table", "inet", TABLE]).output()?;
-    let listed: serde_json::Value = serde_json::from_slice(&sets_list.stdout).context("Could not parse nft table listing")?;
-    let existing: HashSet<String> = listed["nftables"].as_array().into_iter().flatten()
-        .filter_map(|entry| entry.get("set").and_then(|set| set.get("name")).and_then(serde_json::Value::as_str).map(str::to_owned))
-        .collect();
+    let listed: TableListing<'_> = serde_json::from_slice(&table_list.stdout)
+        .context("Could not parse nft table listing")?;
+    let mut existing = HashSet::new();
+    let mut chains = HashSet::new();
+    for entry in listed.nftables {
+        match entry {
+            ListingEntry::Set(set) => { existing.insert(set.name); }
+            ListingEntry::Chain(chain) => { chains.insert(chain.name); }
+            ListingEntry::Other => {}
+        }
+    }
     let mut missing = Vec::new();
     for (name, set_type) in DOWNLOADED_SETS {
         if !existing.contains(name) { missing.push(set_command(name, set_type)); }
@@ -74,9 +143,6 @@ fn ensure_table_and_sets() -> Result<()> {
     if !existing.contains(WHITELIST_IPV6_SET) { missing.push(set_command(WHITELIST_IPV6_SET, SetType::Ipv6Addr)); }
     if !existing.contains(GITHUB_WHITELIST_IPV4_SET) { missing.push(set_command(GITHUB_WHITELIST_IPV4_SET, SetType::Ipv4Addr)); }
     if !existing.contains(GITHUB_WHITELIST_IPV6_SET) { missing.push(set_command(GITHUB_WHITELIST_IPV6_SET, SetType::Ipv6Addr)); }
-    let chains: HashSet<String> = listed["nftables"].as_array().into_iter().flatten()
-        .filter_map(|entry| entry.get("chain").and_then(|chain| chain.get("name")).and_then(serde_json::Value::as_str).map(str::to_owned))
-        .collect();
     if !chains.contains(PREROUTING_CHAIN) {
         missing.push(NfObject::CmdObject(NfCmd::Add(NfListObject::Chain(Chain {
             family: FAMILY,
@@ -252,18 +318,23 @@ fn read_set_elements(name: &str) -> Result<HashSet<String>> {
     if !output.status.success() {
         return Err(anyhow!("Failed to list nftables set {name}: {}", String::from_utf8_lossy(&output.stderr).trim()));
     }
-    let listed: serde_json::Value = serde_json::from_slice(&output.stdout).context("Could not parse nft set listing")?;
-    listed["nftables"].as_array().into_iter().flatten()
-        .filter_map(|entry| entry.get("set").and_then(|set| set.get("elem")).and_then(serde_json::Value::as_array))
-        .flatten().filter_map(|element| {
-            if let Some(prefix) = element.get("prefix") {
-                Some(format!("{}/{}", prefix.get("addr")?.as_str()?, prefix.get("len")?.as_u64()?))
-            } else { element.as_str().map(str::to_owned) }
-        }).map(|value| {
-            parse_network(&value)
-                .map(|network| network.trunc().to_string())
-                .with_context(|| format!("Invalid network in nftables set {name}: {value}"))
-        }).collect()
+    let listed: SetListing<'_> = serde_json::from_slice(&output.stdout)
+        .context("Could not parse nft set listing")?;
+    let mut networks = HashSet::new();
+    for element in listed.nftables.into_iter().filter_map(|entry| match entry {
+        SetListingEntry::Set(set) => set.elem,
+        SetListingEntry::Other => None,
+    }).flatten() {
+        let value = match element {
+            ListedElement::Prefix { prefix } => format!("{}/{}", prefix.addr, prefix.len),
+            ListedElement::Address(address) => address.into_owned(),
+            ListedElement::Other(_) => continue,
+        };
+        let network = parse_network(&value)
+            .with_context(|| format!("Invalid network in nftables set {name}: {value}"))?;
+        networks.insert(network.trunc().to_string());
+    }
+    Ok(networks)
 }
 
 fn named_element_commands(name: &str, networks: &[String], add: bool) -> Result<Vec<NfObject<'static>>> {
