@@ -19,37 +19,25 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build Linux service
+      - name: Build release Debian package
         run: ./linux/build-deb.sh
 
-      - name: Build debug release binary
+      - name: Build debug Debian package
         run: |
-          CARGO_PROFILE_RELEASE_DEBUG=full cargo build --release --manifest-path Cargo.toml -p linux
-          cp target/release/firehol-differ-nftables target/release/firehol-differ-nftables-linux-amd64-debug
-
-      - name: Build normal release package
-        run: ./linux/build-deb.sh
+          CARGO_PROFILE_RELEASE_DEBUG=full BUILD_PROFILE=release PACKAGE_SUFFIX=-debug ./linux/build-deb.sh
 
       - name: Validate Debian package
         run: |
-          package=$(find target/debian -name '*.deb' -print -quit)
-          test -n "$package"
-          dpkg-deb --info "$package"
-          dpkg-deb --contents "$package"
+          for package in target/debian/*.deb; do
+            dpkg-deb --info "$package"
+            dpkg-deb --contents "$package"
+          done
 
       - name: Upload Debian package
         uses: actions/upload-artifact@v6
         with:
           name: firehol-differ-nftables-ubuntu-26.04
           path: target/debian/*.deb
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload debug release binary
-        uses: actions/upload-artifact@v6
-        with:
-          name: firehol-differ-nftables-debug-release-ubuntu-26.04-amd64
-          path: target/release/firehol-differ-nftables-linux-amd64-debug
           if-no-files-found: error
           retention-days: 30
 
@@ -93,16 +81,10 @@ jobs:
           name: firehol-differ-nftables-ubuntu-26.04
           path: dist/ubuntu
 
-      - name: Download debug release binary
-        uses: actions/download-artifact@v8
-        with:
-          name: firehol-differ-nftables-debug-release-ubuntu-26.04-amd64
-          path: dist/ubuntu
-
       - name: Publish release assets
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.release-tag.outputs.tag }}
           files: |
             dist/ubuntu/firehol-differ-nftables-linux-amd64.deb
-            dist/ubuntu/firehol-differ-nftables-linux-amd64-debug
+            dist/ubuntu/firehol-differ-nftables-linux-amd64-debug.deb

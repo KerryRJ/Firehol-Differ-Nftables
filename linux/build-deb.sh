@@ -7,6 +7,8 @@ VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$REPO_ROOT/Cargo.toml" | head 
 ARCH=${DEB_HOST_ARCH:-$(dpkg --print-architecture)}
 OUTPUT_DIR=${OUTPUT_DIR:-"$REPO_ROOT/target/debian"}
 PACKAGE_NAME="firehol-differ-nftables-linux-${ARCH}"
+BUILD_PROFILE=${BUILD_PROFILE:-release}
+PACKAGE_SUFFIX=${PACKAGE_SUFFIX:-}
 STAGE_DIR=$(mktemp -d)
 trap 'rm -rf "$STAGE_DIR"' EXIT
 
@@ -15,7 +17,7 @@ if [ "$(id -u)" -eq 0 ]; then
     exit 1
 fi
 
-cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" -p linux
+cargo build --profile "$BUILD_PROFILE" --manifest-path "$REPO_ROOT/Cargo.toml" -p linux
 
 install -d \
     "$STAGE_DIR/DEBIAN" \
@@ -24,7 +26,7 @@ install -d \
     "$STAGE_DIR/usr/lib/systemd/system/nftables.service.d" \
     "$STAGE_DIR/etc/firehol-differ-nftables" \
     "$STAGE_DIR/var/lib/firehol-differ-nftables"
-install -m 0755 "$REPO_ROOT/target/release/firehol-differ-nftables" "$STAGE_DIR/usr/bin/firehol-differ-nftables"
+install -m 0755 "$REPO_ROOT/target/$BUILD_PROFILE/firehol-differ-nftables" "$STAGE_DIR/usr/bin/firehol-differ-nftables"
 install -m 0644 "$SCRIPT_DIR/firehol-differ-nftables.service" "$STAGE_DIR/usr/lib/systemd/system/firehol-differ-nftables.service"
 install -m 0644 "$SCRIPT_DIR/nftables-firehol.conf" "$STAGE_DIR/usr/lib/systemd/system/nftables.service.d/firehol-differ-nftables.conf"
 install -m 0644 "$SCRIPT_DIR/firehol-nftables-restore.service" "$STAGE_DIR/usr/lib/systemd/system/firehol-nftables-restore.service"
@@ -34,7 +36,7 @@ install -m 0644 "$REPO_ROOT/whitelist-ipv4.txt" "$STAGE_DIR/var/lib/firehol-diff
 install -m 0644 "$REPO_ROOT/whitelist-ipv6.txt" "$STAGE_DIR/var/lib/firehol-differ-nftables/whitelist-ipv6.txt"
 
 cat > "$STAGE_DIR/DEBIAN/control" <<EOF
-Package: firehol-differ-nftables
+Package: firehol-differ-nftables${PACKAGE_SUFFIX}
 Version: $VERSION
 Section: net
 Priority: optional
@@ -105,5 +107,5 @@ EOF
 
 chmod 0755 "$STAGE_DIR/DEBIAN/postinst" "$STAGE_DIR/DEBIAN/prerm" "$STAGE_DIR/DEBIAN/postrm"
 install -d "$OUTPUT_DIR"
-dpkg-deb --build --root-owner-group "$STAGE_DIR" "$OUTPUT_DIR/$PACKAGE_NAME.deb"
-printf '%s\n' "$OUTPUT_DIR/$PACKAGE_NAME.deb"
+dpkg-deb --build --root-owner-group "$STAGE_DIR" "$OUTPUT_DIR/$PACKAGE_NAME${PACKAGE_SUFFIX}.deb"
+printf '%s\n' "$OUTPUT_DIR/$PACKAGE_NAME${PACKAGE_SUFFIX}.deb"
