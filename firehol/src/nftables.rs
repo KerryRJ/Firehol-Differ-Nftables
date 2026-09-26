@@ -7,7 +7,7 @@ use nftables::{
     types::{NfChainPolicy, NfChainType, NfFamily, NfHook},
 };
 use serde::Deserialize;
-use std::{borrow::Cow, collections::HashSet, net::IpAddr, process::{Command, Stdio}};
+use std::{borrow::Cow, collections::HashSet, io::BufReader, net::IpAddr, process::{Command, Stdio}};
 
 #[derive(Deserialize)]
 struct TableListing {
@@ -198,7 +198,7 @@ pub(super) fn replace_lists(
     lists: &[Option<Vec<ipnet::IpNet>>],
     whitelist_ipv4: Option<&[String]>,
     whitelist_ipv6: Option<&[String]>,
-    github_networks: Option<&[String]>,
+    github_networks: Option<&[ipnet::IpNet]>,
     log_blocked: bool,
 ) -> Result<()> {
     ensure!(lists.len() == DOWNLOADED_SETS.len(), "Expected one entry list per downloaded source");
@@ -229,11 +229,27 @@ pub(super) fn replace_lists(
 }
 
 fn ensure_table_and_sets() -> Result<()> {
-    let table_list = Command::new("nft").args(["-j", "list", "table", "inet", TABLE]).output()
+    let mut table_list = Command::new("nft").args(["-j", "list", "table", "inet", TABLE])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .context("Failed to run nft; install nftables")?;
-    let (existing, chains) = if table_list.status.success() {
-        let listed: TableListing = serde_json::from_slice(&table_list.stdout)
-            .context("Could not parse nft table listing")?;
+    let stdout = table_list.stdout.take().context("Failed to read nft table listing")?;
+    let mut stdout = BufReader::new(stdout);
+    let listed_result = {
+        let mut deserializer = serde_json::Deserializer::from_reader(&mut stdout);
+        TableListing::deserialize(&mut deserializer)
+            .and_then(|listed| deserializer.end().map(|()| listed))
+    };
+    if listed_result.is_err() {
+        // Drain the pipe if deserialization stopped early, so the nft process
+        // cannot block while we wait for it to exit.
+        std::io::copy(&mut stdout, &mut std::io::sink())
+            .context("Failed to drain nft table listing")?;
+    }
+    let table_list_status = table_list.wait().context("Failed to wait for nft table listing")?;
+    let (existing, chains) = if table_list_status.success() {
+        let listed: TableListing = listed_result.context("Could not parse nft table listing")?;
         let mut existing = HashSet::new();
         let mut chains = HashSet::new();
         for entry in listed.nftables {
@@ -373,7 +389,7 @@ fn append_whitelist(
     commands: &mut Vec<NfObject<'static>>,
     ipv4_networks: Option<&[String]>,
     ipv6_networks: Option<&[String]>,
-    github_networks: Option<&[String]>,
+    github_networks: Option<&[ipnet::IpNet]>,
 ) -> Result<()> {
     // Reconcile the small user-configured set on each update. The whitelist is
     // independent from the downloaded blacklist network sets.
@@ -386,9 +402,8 @@ fn append_whitelist(
         append_whitelist_set(commands, WHITELIST_IPV6_SET, &configured_ipv6, false)?;
     }
     if let Some(github_networks) = github_networks {
-        let github: Vec<&str> = github_networks.iter().map(String::as_str).collect();
-        append_whitelist_set(commands, GITHUB_WHITELIST_IPV4_SET, &github, true)?;
-        append_whitelist_set(commands, GITHUB_WHITELIST_IPV6_SET, &github, false)?;
+        append_whitelist_networks(commands, GITHUB_WHITELIST_IPV4_SET, github_networks, true)?;
+        append_whitelist_networks(commands, GITHUB_WHITELIST_IPV6_SET, github_networks, false)?;
     }
     Ok(())
 }
@@ -399,9 +414,13 @@ fn append_whitelist_set(commands: &mut Vec<NfObject<'static>>, name: &str, netwo
             .map(|net| net.trunc())
             .with_context(|| format!("Invalid whitelist network: {value}"))
     }).collect::<Result<_>>()?;
-    let mut family_networks: Vec<_> = parsed.iter()
+    append_whitelist_networks(commands, name, &parsed, ipv4)
+}
+
+fn append_whitelist_networks(commands: &mut Vec<NfObject<'static>>, name: &str, networks: &[ipnet::IpNet], ipv4: bool) -> Result<()> {
+    let mut family_networks: Vec<_> = networks.iter()
+        .map(|network| network.trunc())
         .filter(|network| network.addr().is_ipv4() == ipv4)
-        .copied()
         .collect();
     family_networks.sort_by(|left, right| {
         left.addr().cmp(&right.addr()).then_with(|| left.prefix_len().cmp(&right.prefix_len()))

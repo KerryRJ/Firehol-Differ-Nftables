@@ -10,6 +10,7 @@ use anyhow::{Context, Result, ensure};
 use etags::Etags;
 use ipset::Ipset;
 use log::{error, info};
+use serde::{Deserializer, de::{DeserializeSeed, MapAccess, SeqAccess, Visitor}};
 use std::{collections::HashSet, path::{Path, PathBuf}};
 use std::time::Instant;
 use tokio::fs;
@@ -257,32 +258,146 @@ async fn github_metadata(client: &reqwest::Client, cached: &str, use_cache: bool
     download(client, GITHUB_META_URL).await
 }
 
-fn parse_github_ranges(body: &str) -> Result<Vec<String>> {
-    let metadata: serde_json::Value = serde_json::from_str(body).context("Could not parse GitHub IP metadata")?;
-    ensure!(metadata.is_object(), "GitHub IP metadata must be a JSON object");
-    for field in ["hooks", "web", "api", "git"] {
-        ensure!(metadata.get(field).and_then(serde_json::Value::as_array).is_some(), "GitHub IP metadata is missing the {field} ranges");
-    }
-
+fn parse_github_ranges(body: &str) -> Result<Vec<ipnet::IpNet>> {
+    let mut deserializer = serde_json::Deserializer::from_str(body);
     let mut ranges = HashSet::new();
-    collect_ip_ranges(&metadata, &mut ranges);
-    ensure!(ranges.iter().any(|range| range.contains('.')), "GitHub metadata contains no IPv4 ranges");
-    ensure!(ranges.iter().any(|range| range.contains(':')), "GitHub metadata contains no IPv6 ranges");
+    let mut required = [false; 4];
+    deserializer.deserialize_map(GithubMetadataVisitor { ranges: &mut ranges, required: &mut required })
+        .context("Could not parse GitHub IP metadata")?;
+    deserializer.end().context("Could not parse GitHub IP metadata")?;
+    for (index, field) in ["hooks", "web", "api", "git"].into_iter().enumerate() {
+        ensure!(required[index], "GitHub IP metadata is missing the {field} ranges");
+    }
+    ensure!(ranges.iter().any(|network| matches!(network, ipnet::IpNet::V4(_))), "GitHub metadata contains no IPv4 ranges");
+    ensure!(ranges.iter().any(|network| matches!(network, ipnet::IpNet::V6(_))), "GitHub metadata contains no IPv6 ranges");
     let mut ranges: Vec<_> = ranges.into_iter().collect();
     ranges.sort();
     Ok(ranges)
 }
 
-fn collect_ip_ranges(value: &serde_json::Value, ranges: &mut HashSet<String>) {
-    match value {
-        serde_json::Value::Array(values) => values.iter().for_each(|value| collect_ip_ranges(value, ranges)),
-        serde_json::Value::Object(values) => values.values().for_each(|value| collect_ip_ranges(value, ranges)),
-        serde_json::Value::String(value) => {
-            if let Ok(network) = value.parse::<ipnet::IpNet>() {
-                ranges.insert(network.trunc().to_string());
+struct GithubMetadataVisitor<'a> {
+    ranges: &'a mut HashSet<ipnet::IpNet>,
+    required: &'a mut [bool; 4],
+}
+
+impl<'de> Visitor<'de> for GithubMetadataVisitor<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a GitHub IP metadata object")
+    }
+
+    fn visit_map<M>(self, mut map: M) -> std::result::Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        while let Some(key) = map.next_key::<&str>()? {
+            let required_index = match key {
+                "hooks" => Some(0),
+                "web" => Some(1),
+                "api" => Some(2),
+                "git" => Some(3),
+                _ => None,
+            };
+            let mut is_array = false;
+            map.next_value_seed(RangeCollector { ranges: &mut *self.ranges, is_array: Some(&mut is_array) })?;
+            if let Some(index) = required_index {
+                if !is_array {
+                    return Err(serde::de::Error::custom(format!("GitHub metadata field {key} must be an array")));
+                }
+                self.required[index] = true;
             }
         }
-        _ => {}
+        Ok(())
+    }
+}
+
+struct RangeCollector<'a> {
+    ranges: &'a mut HashSet<ipnet::IpNet>,
+    is_array: Option<&'a mut bool>,
+}
+
+impl<'de> DeserializeSeed<'de> for RangeCollector<'_> {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for RangeCollector<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON value containing IP range strings")
+    }
+
+    fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        if let Ok(network) = value.parse::<ipnet::IpNet>() {
+            self.ranges.insert(network.trunc());
+        }
+        Ok(())
+    }
+
+    fn visit_borrowed_str<E>(self, value: &'de str) -> std::result::Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.visit_str(value)
+    }
+
+    fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        self.visit_str(&value)
+    }
+
+    fn visit_seq<A>(mut self, mut sequence: A) -> std::result::Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        if let Some(is_array) = self.is_array.take() {
+            *is_array = true;
+        }
+        while sequence.next_element_seed(RangeCollector { ranges: &mut *self.ranges, is_array: None })?.is_some() {}
+        Ok(())
+    }
+
+    fn visit_map<M>(self, mut map: M) -> std::result::Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        while map.next_key::<serde::de::IgnoredAny>()?.is_some() {
+            map.next_value_seed(RangeCollector { ranges: &mut *self.ranges, is_array: None })?;
+        }
+        Ok(())
+    }
+
+    fn visit_bool<E>(self, _: bool) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_i64<E>(self, _: i64) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_u64<E>(self, _: u64) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_f64<E>(self, _: f64) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
+        Ok(())
     }
 }
 
