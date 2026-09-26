@@ -129,7 +129,7 @@ where
                 M: serde::de::MapAccess<'de>,
             {
                 let mut element = ListedElement::Other;
-                while let Some(kind) = map.next_key::<String>()? {
+                while let Some(kind) = map.next_key::<&str>()? {
                     if kind == "prefix" {
                         element = ListedElement::Prefix(map.next_value::<ListedPrefix<'a>>()?);
                     } else {
