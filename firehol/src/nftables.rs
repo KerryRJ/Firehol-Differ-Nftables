@@ -193,6 +193,7 @@ const WHITELIST_IPV6_SET: &str = "WhitelistIPv6";
 
 const GITHUB_WHITELIST_IPV4_SET: &str = "GithubWhitelistIPv4";
 const GITHUB_WHITELIST_IPV6_SET: &str = "GithubWhitelistIPv6";
+const ELEMENTS_PER_NFT_COMMAND: usize = 100;
 
 pub(super) fn replace_lists(
     lists: &[Option<Vec<ipnet::IpNet>>],
@@ -217,12 +218,8 @@ pub(super) fn replace_lists(
         info!("nftables set {name}: before={} additions={additions} deletions={deletions} after={after_count}", current.len());
         let deletions: Vec<ipnet::IpNet> = current.difference(&desired).copied().collect();
         let additions: Vec<ipnet::IpNet> = desired.difference(&current).copied().collect();
-        if let Some(command) = named_element_command(name, &deletions, false) {
-            commands.push(command);
-        }
-        if let Some(command) = named_element_command(name, &additions, true) {
-            commands.push(command);
-        }
+        commands.extend(named_element_commands(name, &deletions, false));
+        commands.extend(named_element_commands(name, &additions, true));
     }
     append_prerouting_rules(&mut commands, log_blocked);
     run_document(commands)
@@ -450,9 +447,7 @@ fn append_whitelist_networks(commands: &mut Vec<NfObject<'static>>, name: &str, 
         comment: None,
     })))));
     let desired: Vec<_> = desired.into_iter().collect();
-    if let Some(command) = named_element_command(name, &desired, true) {
-        commands.push(command);
-    }
+    commands.extend(named_element_commands(name, &desired, true));
     Ok(())
 }
 
@@ -482,32 +477,30 @@ fn read_set_elements(name: &str) -> Result<HashSet<ipnet::IpNet>> {
     Ok(networks)
 }
 
-fn named_element_command(name: &str, networks: &[ipnet::IpNet], add: bool) -> Option<NfObject<'static>> {
-    if networks.is_empty() {
-        return None;
-    }
-    let mut elements = Vec::with_capacity(networks.len());
-    for network in networks {
-        let (addr, len) = match network {
-            ipnet::IpNet::V4(net) => (net.network().to_string(), net.prefix_len()),
-            ipnet::IpNet::V6(net) => (net.network().to_string(), net.prefix_len()),
+fn named_element_commands(name: &str, networks: &[ipnet::IpNet], add: bool) -> Vec<NfObject<'static>> {
+    networks.chunks(ELEMENTS_PER_NFT_COMMAND).map(|chunk| {
+        let elements = chunk.iter().map(|network| {
+            let (addr, len) = match network {
+                ipnet::IpNet::V4(net) => (net.network().to_string(), net.prefix_len()),
+                ipnet::IpNet::V6(net) => (net.network().to_string(), net.prefix_len()),
+            };
+            Expression::Named(NamedExpression::Prefix(Prefix {
+                addr: Box::new(Expression::String(Cow::Owned(addr))),
+                len: len.into(),
+            }))
+        }).collect::<Vec<_>>();
+        let element = Element {
+            family: FAMILY,
+            table: TABLE.into(),
+            name: Cow::Owned(name.to_owned()),
+            elem: elements.into(),
         };
-        elements.push(Expression::Named(NamedExpression::Prefix(Prefix {
-            addr: Box::new(Expression::String(Cow::Owned(addr))),
-            len: len.into(),
-        })));
-    }
-    let element = Element {
-        family: FAMILY,
-        table: TABLE.into(),
-        name: Cow::Owned(name.to_owned()),
-        elem: elements.into(),
-    };
-    Some(NfObject::CmdObject(if add {
-        NfCmd::Add(NfListObject::Element(element))
-    } else {
-        NfCmd::Delete(NfListObject::Element(element))
-    }))
+        NfObject::CmdObject(if add {
+            NfCmd::Add(NfListObject::Element(element))
+        } else {
+            NfCmd::Delete(NfListObject::Element(element))
+        })
+    }).collect()
 }
 
 fn parse_prefix(address: &str, prefix_len: u8) -> Result<ipnet::IpNet> {
