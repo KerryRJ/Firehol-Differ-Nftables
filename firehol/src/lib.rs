@@ -1,5 +1,6 @@
 mod config;
 mod etags;
+#[cfg(target_os = "linux")]
 mod ipset;
 #[cfg(target_os = "linux")]
 #[path = "nftables.rs"]
@@ -8,10 +9,14 @@ mod nftables_sync;
 pub use config::{load_config, Config};
 use anyhow::{Context, Result, ensure};
 use etags::Etags;
+#[cfg(target_os = "linux")]
 use ipset::Ipset;
 use log::{error, info};
+#[cfg(target_os = "linux")]
 use serde::{Deserializer, de::{DeserializeSeed, MapAccess, SeqAccess, Visitor}};
-use std::{collections::HashSet, path::{Path, PathBuf}};
+#[cfg(target_os = "linux")]
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
@@ -84,6 +89,7 @@ async fn run_once_with_client(
         return Ok(());
     }
 
+    #[cfg(target_os = "linux")]
     let github_networks = match github_meta_remote.as_deref() {
         Some(meta) => Some(parse_github_ranges(meta)?),
         None => None,
@@ -177,6 +183,7 @@ pub async fn restore_cached(data_dir: &Path, config: &Config) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 async fn persist_downloads(
     data_dir: &Path,
     l1: &str,
@@ -248,6 +255,7 @@ async fn load_whitelist(data_dir: &Path) -> Result<(Vec<String>, Vec<String>)> {
     Ok((ipv4_networks, ipv6_networks))
 }
 
+#[cfg(target_os = "linux")]
 async fn github_metadata(client: &reqwest::Client, cached: &str, use_cache: bool) -> Result<String> {
     if use_cache && !cached.is_empty() {
         if parse_github_ranges(cached).is_ok() {
@@ -258,6 +266,7 @@ async fn github_metadata(client: &reqwest::Client, cached: &str, use_cache: bool
     download(client, GITHUB_META_URL).await
 }
 
+#[cfg(target_os = "linux")]
 fn parse_github_ranges(body: &str) -> Result<Vec<ipnet::IpNet>> {
     let mut deserializer = serde_json::Deserializer::from_str(body);
     let mut ranges = HashSet::new();
@@ -275,11 +284,13 @@ fn parse_github_ranges(body: &str) -> Result<Vec<ipnet::IpNet>> {
     Ok(ranges)
 }
 
+#[cfg(target_os = "linux")]
 struct GithubMetadataVisitor<'a> {
     ranges: &'a mut HashSet<ipnet::IpNet>,
     required: &'a mut [bool; 4],
 }
 
+#[cfg(target_os = "linux")]
 impl<'de> Visitor<'de> for GithubMetadataVisitor<'_> {
     type Value = ();
 
@@ -312,11 +323,13 @@ impl<'de> Visitor<'de> for GithubMetadataVisitor<'_> {
     }
 }
 
+#[cfg(target_os = "linux")]
 struct RangeCollector<'a> {
     ranges: &'a mut HashSet<ipnet::IpNet>,
     is_array: Option<&'a mut bool>,
 }
 
+#[cfg(target_os = "linux")]
 impl<'de> DeserializeSeed<'de> for RangeCollector<'_> {
     type Value = ();
 
@@ -328,6 +341,7 @@ impl<'de> DeserializeSeed<'de> for RangeCollector<'_> {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl<'de> Visitor<'de> for RangeCollector<'_> {
     type Value = ();
 
@@ -410,6 +424,7 @@ async fn download(client: &reqwest::Client, url: &str) -> Result<String> {
     Ok(client.get(url).send().await?.error_for_status()?.text().await?)
 }
 
+#[cfg(target_os = "linux")]
 async fn read_or_empty(path: &Path) -> Result<String> {
     Ok(match fs::read_to_string(path).await { Ok(value) => value, Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(), Err(error) => return Err(error.into()) })
 }
