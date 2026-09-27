@@ -4,4 +4,5 @@ l1_url = "https://iplists.firehol.org/files/firehol_level1.netset"
 l2_url = "https://iplists.firehol.org/files/firehol_level2.netset"
 bogons_ipv4_url = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv4.txt"
 bogons_ipv6_url = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv6.txt"
+github_meta_url = "https://api.github.com/meta"
 log_blocked = false

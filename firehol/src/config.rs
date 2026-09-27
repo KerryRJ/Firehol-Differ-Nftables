@@ -8,6 +8,7 @@ const DEFAULT_L1_URL: &str = "https://iplists.firehol.org/files/firehol_level1.n
 const DEFAULT_L2_URL: &str = "https://iplists.firehol.org/files/firehol_level2.netset";
 const DEFAULT_BOGONS_IPV4_URL: &str = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv4.txt";
 const DEFAULT_BOGONS_IPV6_URL: &str = "https://www.team-cymru.org/Services/Bogons/fullbogons-ipv6.txt";
+const DEFAULT_GITHUB_META_URL: &str = "https://api.github.com/meta";
 
 #[derive(Clone, Debug, Deserialize, serde::Serialize)]
 pub struct Config {
@@ -23,6 +24,8 @@ pub struct Config {
     pub bogons_ipv4_url: String,
     #[serde(default = "default_bogons_ipv6_url")]
     pub bogons_ipv6_url: String,
+    #[serde(default = "default_github_meta_url")]
+    pub github_meta_url: String,
     #[serde(default = "default_log_blocked")]
     pub log_blocked: bool,
 }
@@ -36,6 +39,7 @@ impl Default for Config {
             l2_url: DEFAULT_L2_URL.to_owned(),
             bogons_ipv4_url: default_bogons_ipv4_url(),
             bogons_ipv6_url: default_bogons_ipv6_url(),
+            github_meta_url: default_github_meta_url(),
             log_blocked: default_log_blocked(),
         }
     }
@@ -51,6 +55,10 @@ fn default_bogons_ipv4_url() -> String {
 
 fn default_bogons_ipv6_url() -> String {
     DEFAULT_BOGONS_IPV6_URL.to_owned()
+}
+
+fn default_github_meta_url() -> String {
+    DEFAULT_GITHUB_META_URL.to_owned()
 }
 
 fn default_log_blocked() -> bool {

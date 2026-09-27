@@ -21,8 +21,6 @@ use std::time::Instant;
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
-const GITHUB_META_URL: &str = "https://api.github.com/meta";
-
 pub async fn run_scheduler(data_dir: PathBuf, config: Config, cancellation: CancellationToken) -> Result<()> {
     let client = reqwest::Client::builder().user_agent("firehol-differ-nftables").build()?;
     let mut ticker = tokio::time::interval(config.interval);
@@ -57,7 +55,7 @@ async fn run_once_with_client(
         remote_etag(client, &config.l2_url),
         remote_etag(client, &config.bogons_ipv4_url),
         remote_etag(client, &config.bogons_ipv6_url),
-        remote_etag(client, GITHUB_META_URL),
+        remote_etag(client, &config.github_meta_url),
     )?;
 
     let (has_l1, has_l2, has_bogons_ipv4, has_bogons_ipv6, has_github_meta) = tokio::try_join!(
@@ -72,7 +70,7 @@ async fn run_once_with_client(
         download_if_changed(client, "FireHOL Level 2", &config.l2_url, has_l2, l2_etag.as_deref(), etags.l2.as_deref()),
         download_if_changed(client, "Team Cymru IPv4 bogons", &config.bogons_ipv4_url, has_bogons_ipv4, bogons_ipv4_etag.as_deref(), etags.bogons_ipv4.as_deref()),
         download_if_changed(client, "Team Cymru IPv6 bogons", &config.bogons_ipv6_url, has_bogons_ipv6, bogons_ipv6_etag.as_deref(), etags.bogons_ipv6.as_deref()),
-        download_if_changed(client, "GitHub IP metadata", GITHUB_META_URL, has_github_meta, github_meta_etag.as_deref(), etags.github_meta.as_deref()),
+        download_if_changed(client, "GitHub IP metadata", &config.github_meta_url, has_github_meta, github_meta_etag.as_deref(), etags.github_meta.as_deref()),
     )?;
 
     if l1_remote.is_none()
@@ -154,7 +152,7 @@ pub async fn restore_cached(data_dir: &Path, config: &Config) -> Result<()> {
     let bogons_ipv4 = if missing_bogons_ipv4 { download(&client, &config.bogons_ipv4_url).await? } else { bogons_ipv4 };
     let bogons_ipv6 = if missing_bogons_ipv6 { download(&client, &config.bogons_ipv6_url).await? } else { bogons_ipv6 };
     let cached_github_meta = read_or_empty(&data_dir.join("github-meta.json")).await?;
-    let github_meta = github_metadata(&client, &cached_github_meta, true).await?;
+    let github_meta = github_metadata(&client, &config.github_meta_url, &cached_github_meta, true).await?;
 
     let processing_result = async {
         let github_networks = parse_github_ranges(&github_meta)?;
@@ -256,14 +254,14 @@ async fn load_whitelist(data_dir: &Path) -> Result<(Vec<String>, Vec<String>)> {
 }
 
 #[cfg(target_os = "linux")]
-async fn github_metadata(client: &reqwest::Client, cached: &str, use_cache: bool) -> Result<String> {
+async fn github_metadata(client: &reqwest::Client, url: &str, cached: &str, use_cache: bool) -> Result<String> {
     if use_cache && !cached.is_empty() {
         if parse_github_ranges(cached).is_ok() {
             return Ok(cached.to_owned());
         }
     }
 
-    download(client, GITHUB_META_URL).await
+    download(client, url).await
 }
 
 #[cfg(target_os = "linux")]
