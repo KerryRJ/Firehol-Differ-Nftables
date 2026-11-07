@@ -20,9 +20,9 @@ humantime-serde = "1.1"
 ipnet = "2.12"
 log = { workspace = true }
 reqwest = { version = "0.13", features = ["blocking"] }
-nftables = "0.6.3"
+nftables = "0.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "1.1"
+toml = "1.2"
 tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "signal", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
